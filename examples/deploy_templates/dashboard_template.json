@@ -1,0 +1,22 @@
+{
+    "assetType": "dashboard",
+    "Name": "Example Dashboard",
+    "DashboardId": "dashboard-id-placeholder",
+    "DestinationAwsAccountId": "123456789012",
+    "AwsRegion": "us-west-2",
+    "DefaultPermissions": [],
+    "Tags": {},
+    "StringReplacements": [],
+    "template": {
+      "Definition": {
+        "DataSetIdentifierDeclarations": [],
+        "Sheets": [],
+        "CalculatedFields": [],
+        "FilterGroups": [],
+        "Options": {
+          "Timezone": "US/Eastern",
+          "WeekStart": "SUNDAY"
+        }
+      }
+    }
+  }

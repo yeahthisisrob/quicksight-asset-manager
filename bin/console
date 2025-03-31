@@ -1,0 +1,34 @@
+#!/usr/bin/env php
+<?php
+
+require __DIR__ . '/../vendor/autoload.php';
+require __DIR__ . '/../bootstrap.php';
+
+use Symfony\Component\Console\Application;
+use QSAssetManager\Command\Exploration\Dashboard\RenameDashboardCommand;
+use QSAssetManager\Command\Exploration\Analysis\RenameAnalysisCommand;
+use QSAssetManager\Command\Exploration\Dashboard\RemoveBrokenDashboardDataSetsCommand;
+use QSAssetManager\Command\Exploration\Analysis\RemoveBrokenAnalysisDataSetsCommand;
+use QSAssetManager\Command\Tagging\ScanAssetsCommand;
+use QSAssetManager\Command\Export\ExportAssetsCommand;
+use QSAssetManager\Command\Exploration\Dashboard\DeployDashboardCommand;
+use QSAssetManager\Command\Exploration\Analysis\DeployAnalysisCommand;
+use QSAssetManager\Command\Exploration\Dashboard\ExportDashboardViewCountsCommand; // Added new command
+
+// Load global configuration
+$config = require PROJECT_ROOT . '/config/global.php';
+
+$application = new Application('QSAssetManager', '1.0.0');
+
+// Register your commands
+$application->add(new RenameDashboardCommand());
+$application->add(new RenameAnalysisCommand());
+$application->add(new RemoveBrokenDashboardDataSetsCommand());
+$application->add(new RemoveBrokenAnalysisDataSetsCommand());
+$application->add(new ScanAssetsCommand());
+$application->add(new ExportAssetsCommand($config));
+$application->add(new DeployDashboardCommand());
+$application->add(new DeployAnalysisCommand());
+$application->add(new ExportDashboardViewCountsCommand()); // New command registered
+
+$application->run();

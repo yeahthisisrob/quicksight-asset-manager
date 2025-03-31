@@ -1,0 +1,31 @@
+{
+    "assetType": "dataset",
+    "Name": "Example Dataset",
+    "DataSetId": "dataset-id-placeholder",
+    "DestinationAwsAccountId": "123456789012",
+    "AwsRegion": "us-west-2",
+    "Tags": {},
+    "template": {
+      "DataSet": {
+        "Arn": "arn:aws:quicksight:us-west-2:123456789012:dataset/dataset-id-placeholder",
+        "DataSetId": "dataset-id-placeholder",
+        "Name": "Example Dataset",
+        "PhysicalTableMap": {},
+        "LogicalTableMap": {},
+        "OutputColumns": [],
+        "ImportMode": "SPICE"
+      },
+      "DataSetRefreshProperties": {
+        "RefreshConfiguration": {
+          "IncrementalRefresh": {
+            "LookbackWindow": {
+              "ColumnName": "date_column",
+              "Size": 1,
+              "SizeUnit": "DAY"
+            }
+          }
+        }
+      },
+      "RefreshSchedules": []
+    }
+  }
