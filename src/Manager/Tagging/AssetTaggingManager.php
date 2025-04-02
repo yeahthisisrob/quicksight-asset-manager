@@ -14,12 +14,14 @@ class AssetTaggingManager extends TaggingManager
      * @param bool $tagDashboards Whether to tag dashboards.
      * @param bool $tagDatasets   Whether to tag datasets.
      * @param bool $tagAnalyses   Whether to tag analyses.
+     * @param bool $autoApply     Whether to automatically apply suggested tags without prompting.
      * @return array Statistics about the tagging operation.
      */
     public function interactiveScan(
         bool $tagDashboards = true,
         bool $tagDatasets = true,
-        bool $tagAnalyses = true
+        bool $tagAnalyses = true,
+        bool $autoApply = false
     ): array {
         $stats = [
             'dashboards' => ['total' => 0, 'tagged' => 0, 'untagged' => []],
@@ -32,13 +34,13 @@ class AssetTaggingManager extends TaggingManager
         $this->outputFolderGroupMatches(folders: $folders);
 
         if ($tagDashboards) {
-            $stats['dashboards'] = $this->scanAndTagDashboards(folders: $folders);
+            $stats['dashboards'] = $this->scanAndTagDashboards(folders: $folders, autoApply: $autoApply);
         }
         if ($tagDatasets) {
-            $stats['datasets'] = $this->scanAndTagDatasets(folders: $folders);
+            $stats['datasets'] = $this->scanAndTagDatasets(folders: $folders, autoApply: $autoApply);
         }
         if ($tagAnalyses) {
-            $stats['analyses'] = $this->scanAndTagAnalyses(folders: $folders);
+            $stats['analyses'] = $this->scanAndTagAnalyses(folders: $folders, autoApply: $autoApply);
         }
 
         $this->outputSummary(stats: $stats);
@@ -80,7 +82,7 @@ class AssetTaggingManager extends TaggingManager
     /**
      * Scan and tag dashboards.
      */
-    protected function scanAndTagDashboards(array $folders): array
+    protected function scanAndTagDashboards(array $folders, bool $autoApply = false): array
     {
         return $this->scanAndTagAssets(
             folders:       $folders,
@@ -88,14 +90,15 @@ class AssetTaggingManager extends TaggingManager
             apiMethod:     'listDashboards',
             resultKey:     'DashboardSummaryList',
             assetTypeName: 'Dashboard',
-            idField:       'DashboardId'
+            idField:       'DashboardId',
+            autoApply:     $autoApply
         );
     }
 
     /**
      * Scan and tag datasets.
      */
-    protected function scanAndTagDatasets(array $folders): array
+    protected function scanAndTagDatasets(array $folders, bool $autoApply = false): array
     {
         return $this->scanAndTagAssets(
             folders:           $folders,
@@ -104,14 +107,15 @@ class AssetTaggingManager extends TaggingManager
             resultKey:         'DataSetSummaries',
             assetTypeName:     'Dataset',
             idField:           'DataSetId',
-            handleDatasetErrors: true
+            handleDatasetErrors: true,
+            autoApply:         $autoApply
         );
     }
 
     /**
      * Scan and tag analyses.
      */
-    protected function scanAndTagAnalyses(array $folders): array
+    protected function scanAndTagAnalyses(array $folders, bool $autoApply = false): array
     {
         return $this->scanAndTagAssets(
             folders:       $folders,
@@ -119,7 +123,8 @@ class AssetTaggingManager extends TaggingManager
             apiMethod:     'listAnalyses',
             resultKey:     'AnalysisSummaryList',
             assetTypeName: 'Analysis',
-            idField:       'AnalysisId'
+            idField:       'AnalysisId',
+            autoApply:     $autoApply
         );
     }
 
@@ -133,6 +138,7 @@ class AssetTaggingManager extends TaggingManager
      * @param string $assetTypeName       User-friendly name of the asset type.
      * @param string $idField             Field name that holds the asset ID.
      * @param bool   $handleDatasetErrors Whether to handle dataset-specific errors.
+     * @param bool   $autoApply           Whether to automatically apply suggested tags without prompting.
      * @return array Statistics about the tagging operation.
      */
     protected function scanAndTagAssets(
@@ -142,7 +148,8 @@ class AssetTaggingManager extends TaggingManager
         string $resultKey,
         string $assetTypeName,
         string $idField,
-        bool $handleDatasetErrors = false
+        bool $handleDatasetErrors = false,
+        bool $autoApply = false
     ): array {
         $assetCount    = 0;
         $taggedCount   = 0;
@@ -198,7 +205,8 @@ class AssetTaggingManager extends TaggingManager
                                     derivedTag:          $derivedTag,
                                     taggedCount:         $taggedCount,
                                     untaggedAssets:      $untaggedAssets,
-                                    handleDatasetErrors: $handleDatasetErrors
+                                    handleDatasetErrors: $handleDatasetErrors,
+                                    autoApply:           $autoApply
                                 )
                             ) {
                                 $untaggedAssets[] = [
@@ -236,7 +244,8 @@ class AssetTaggingManager extends TaggingManager
                                 derivedTag:          $derivedTag,
                                 taggedCount:         $taggedCount,
                                 untaggedAssets:      $untaggedAssets,
-                                handleDatasetErrors: $handleDatasetErrors
+                                handleDatasetErrors: $handleDatasetErrors,
+                                autoApply:           $autoApply
                             )
                         ) {
                             $untaggedAssets[] = [
@@ -277,6 +286,7 @@ class AssetTaggingManager extends TaggingManager
      * @param int    &$taggedCount      Reference to the tagged count.
      * @param array  &$untaggedAssets   Reference to the untagged assets array.
      * @param bool   $handleDatasetErrors Whether to handle dataset-specific errors.
+     * @param bool   $autoApply         Whether to automatically apply suggested tags without prompting.
      * @return bool True if the asset was tagged, false otherwise.
      */
     protected function handleAssetTagging(
@@ -286,13 +296,16 @@ class AssetTaggingManager extends TaggingManager
         ?string $derivedTag,
         int &$taggedCount,
         array &$untaggedAssets,
-        bool $handleDatasetErrors = false
+        bool $handleDatasetErrors = false,
+        bool $autoApply = false
     ): bool {
         if ($derivedTag) {
             $this->output(message: "  Suggested Group: '$derivedTag'");
-            $applyTag = $this->io
+
+            $applyTag = $autoApply || ($this->io
                 ? $this->io->confirm("  Apply '$derivedTag'?", false)
-                : (strtolower(trim(fgets(STDIN))) === 'y');
+                : (strtolower(trim(fgets(STDIN))) === 'y'));
+
             if ($applyTag) {
                 try {
                     if (
@@ -421,5 +434,231 @@ class AssetTaggingManager extends TaggingManager
         $this->output(message: "  Analyses: {$stats['analyses']['total']} total, " .
             "{$stats['analyses']['tagged']} tagged, " .
             count($stats['analyses']['untagged']) . " untagged");
+    }
+
+    /**
+     * Scan and tag QuickSight users based on email domains.
+     *
+     * @param bool $autoApply Whether to automatically apply suggested tags without prompting.
+     * @return array Statistics about the tagging operation.
+     */
+    public function scanAndTagUsers(bool $autoApply = false): array
+    {
+        $this->output(message: "Scanning QuickSight Users for tagging...");
+
+        $stats = [
+            'total'   => 0,
+            'tagged'  => 0,
+            'skipped' => 0
+        ];
+
+        $nextToken = null;
+
+        do {
+            $params = [
+                'AwsAccountId' => $this->awsAccountId,
+                'Namespace'    => 'default'
+            ];
+
+            if ($nextToken) {
+                $params['NextToken'] = $nextToken;
+            }
+
+            try {
+                $response = QuickSightHelper::executeWithRetry(
+                    $this->quickSight,
+                    'listUsers',
+                    $params
+                );
+
+                foreach ($response['UserList'] as $user) {
+                    $stats['total']++;
+                    $userArn = $user['Arn'];
+                    $email = $user['Email'];
+                    $userName = $user['UserName'];
+
+                    // Check for existing tag
+                    $tags = TaggingHelper::getResourceTags(
+                        $this->quickSight,
+                        $userArn
+                    );
+
+                    $existingTag = TaggingHelper::getGroupTag(
+                        tags:   $tags,
+                        tagKey: $this->tagKey
+                    );
+
+                    // Determine group tag based on email domain
+                    $derivedTag = $this->determineGroupFromEmail($email);
+
+                    if ($existingTag) {
+                        $this->output(
+                            message: "✓ User $userName ($email) already tagged with '{$existingTag}'",
+                            type:    'success'
+                        );
+                        $stats['tagged']++;
+                        continue;
+                    }
+
+                    if ($derivedTag) {
+                        $this->output(
+                            message: "⚠ User $userName ($email)",
+                            type:    'warning'
+                        );
+                        $this->output(message: "  Suggested Group: '$derivedTag'");
+
+                        $applyTag = $autoApply || ($this->io
+                            ? $this->io->confirm("  Apply '$derivedTag'?", false)
+                            : (strtolower(trim(fgets(STDIN))) === 'y'));
+
+                        if ($applyTag) {
+                            try {
+                                TaggingHelper::applyGroupTag(
+                                    $this->quickSight,
+                                    $this->awsAccountId,
+                                    $userArn,
+                                    $derivedTag,
+                                    $this->tagKey
+                                );
+                                $stats['tagged']++;
+                                $this->output(
+                                    message: "  ✓ Tagged as '$derivedTag'",
+                                    type:    'success'
+                                );
+                            } catch (AwsException $e) {
+                                $this->output(
+                                    message: "  ✗ Failed: " . $e->getMessage(),
+                                    type:    'error'
+                                );
+                            }
+                        } else {
+                            // If suggested tag was declined, offer manual tagging
+                            $manualTag = $this->io
+                                ? $this->io->confirm("  Manually tag $userName?", false)
+                                : (strtolower(trim(fgets(STDIN))) === 'y');
+
+                            if ($manualTag) {
+                                $newTag = $this->io
+                                    ? $this->io->ask("  Enter group tag")
+                                    : trim(fgets(STDIN));
+
+                                if (!empty($newTag)) {
+                                    try {
+                                        TaggingHelper::applyGroupTag(
+                                            $this->quickSight,
+                                            $this->awsAccountId,
+                                            $userArn,
+                                            $newTag,
+                                            $this->tagKey
+                                        );
+                                        $stats['tagged']++;
+                                        $this->output(
+                                            message: "  ✓ Tagged as '$newTag'",
+                                            type:    'success'
+                                        );
+                                    } catch (AwsException $e) {
+                                        $this->output(
+                                            message: "  ✗ Failed: " . $e->getMessage(),
+                                            type:    'error'
+                                        );
+                                    }
+                                } else {
+                                    $this->output(message: "  No tag provided. Skipped.");
+                                    $stats['skipped']++;
+                                }
+                            } else {
+                                $this->output(message: "  Skipped.");
+                                $stats['skipped']++;
+                            }
+                        }
+                    } else {
+                        $this->output(
+                            message: "⚠ User $userName ($email) - No matching domain",
+                            type:    'warning'
+                        );
+
+                        // No derived tag, offer manual tagging directly
+                        $manualTag = $this->io
+                            ? $this->io->confirm("  Manually tag $userName?", false)
+                            : (strtolower(trim(fgets(STDIN))) === 'y');
+
+                        if ($manualTag) {
+                            $newTag = $this->io
+                                ? $this->io->ask("  Enter group tag")
+                                : trim(fgets(STDIN));
+
+                            if (!empty($newTag)) {
+                                try {
+                                    TaggingHelper::applyGroupTag(
+                                        $this->quickSight,
+                                        $this->awsAccountId,
+                                        $userArn,
+                                        $newTag,
+                                        $this->tagKey
+                                    );
+                                    $stats['tagged']++;
+                                    $this->output(
+                                        message: "  ✓ Tagged as '$newTag'",
+                                        type:    'success'
+                                    );
+                                } catch (AwsException $e) {
+                                    $this->output(
+                                        message: "  ✗ Failed: " . $e->getMessage(),
+                                        type:    'error'
+                                    );
+                                }
+                            } else {
+                                $this->output(message: "  No tag provided. Skipped.");
+                                $stats['skipped']++;
+                            }
+                        } else {
+                            $this->output(message: "  Skipped.");
+                            $stats['skipped']++;
+                        }
+                    }
+                }
+
+                $nextToken = $response['NextToken'] ?? null;
+            } catch (AwsException $e) {
+                $this->output(
+                    message: "Error listing users: " . $e->getMessage(),
+                    type:    'error'
+                );
+                break;
+            }
+        } while ($nextToken);
+
+        $this->output(
+            message: "User scan complete. Processed {$stats['total']} users, " .
+                    "tagged {$stats['tagged']}, skipped {$stats['skipped']}."
+        );
+
+        return $stats;
+    }
+
+    /**
+     * Determine the group tag based on user's email domain.
+     *
+     * @param string $email The user's email address
+     * @return string|null The derived group tag or null if no match found
+     */
+    protected function determineGroupFromEmail(string $email): ?string
+    {
+        $atPos = strpos($email, '@');
+        if ($atPos === false) {
+            return null;
+        }
+
+        $domain = strtolower(substr($email, $atPos + 1));
+
+        foreach ($this->emailDomains as $groupKey => $domains) {
+            foreach ($domains as $matchDomain) {
+                if ($domain === strtolower($matchDomain)) {
+                    return $groupKey;
+                }
+            }
+        }
+
+        return null;
     }
 }

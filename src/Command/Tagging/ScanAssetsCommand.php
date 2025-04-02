@@ -22,22 +22,34 @@ class ScanAssetsCommand extends Command
                 'This command scans your QuickSight assets and helps you assign group tags to them.'
             )
             ->addOption(
-                'dashboard',
-                'd',
-                InputOption::VALUE_NONE,
-                'Scan only dashboards'
+                name: 'dashboard',
+                shortcut: 'd',
+                mode: InputOption::VALUE_NONE,
+                description: 'Scan only dashboards'
             )
             ->addOption(
-                'dataset',
-                's',
-                InputOption::VALUE_NONE,
-                'Scan only datasets'
+                name: 'dataset',
+                shortcut: 's',
+                mode: InputOption::VALUE_NONE,
+                description: 'Scan only datasets'
             )
             ->addOption(
-                'analysis',
-                'a',
-                InputOption::VALUE_NONE,
-                'Scan only analyses'
+                name: 'analysis',
+                shortcut: 'a',
+                mode: InputOption::VALUE_NONE,
+                description: 'Scan only analyses'
+            )
+            ->addOption(
+                name: 'users',
+                shortcut: 'u',
+                mode: InputOption::VALUE_NONE,
+                description: 'Scan and tag users based on email domains'
+            )
+            ->addOption(
+                name: 'auto',
+                shortcut: 'A',
+                mode: InputOption::VALUE_NONE,
+                description: 'Automatically apply suggested tags without prompting'
             );
     }
 
@@ -51,6 +63,10 @@ class ScanAssetsCommand extends Command
         $awsRegion    = $config['awsRegion'] ?? 'us-west-2';
         $awsAccountId = $config['awsAccountId'] ?? '';
 
+        if (empty($awsAccountId)) {
+            $awsAccountId = $io->ask('Enter AWS Account ID');
+        }
+
         // Create QuickSight client
         $qsClient = new QuickSightClient([
             'version' => '2018-04-01',
@@ -58,20 +74,47 @@ class ScanAssetsCommand extends Command
         ]);
 
         // Create tagging manager
-        $manager = new AssetTaggingManager($config, $qsClient, $awsAccountId, $awsRegion, $io);
+        $manager = new AssetTaggingManager(
+            config:       $config,
+            quickSight:   $qsClient,
+            awsAccountId: $awsAccountId,
+            awsRegion:    $awsRegion,
+            io:           $io
+        );
 
         // Determine which asset types to scan
         $dashboards = $input->getOption('dashboard');
         $datasets   = $input->getOption('dataset');
         $analyses   = $input->getOption('analysis');
+        $users      = $input->getOption('users');
+        $auto       = $input->getOption('auto');
 
-        // If none specified, scan all asset types
+        if ($auto) {
+            $io->info("Auto-tagging mode enabled - suggested tags will be applied without prompting");
+        }
+
+        // If only users is specified
+        if ($users && !$dashboards && !$datasets && !$analyses) {
+            $stats = $manager->scanAndTagUsers(autoApply: $auto);
+
+            // Output summary specific to users
+            $io->section('User Tagging Summary');
+            $io->success("User tagging completed: {$stats['total']} total, {$stats['tagged']} tagged");
+            return Command::SUCCESS;
+        }
+
+        // If none specified, scan all asset types (not including users)
         if (!$dashboards && !$datasets && !$analyses) {
             $dashboards = $datasets = $analyses = true;
         }
 
         // Run interactive scan and tagging
-        $stats = $manager->interactiveScan($dashboards, $datasets, $analyses);
+        $stats = $manager->interactiveScan(
+            tagDashboards: $dashboards,
+            tagDatasets: $datasets,
+            tagAnalyses: $analyses,
+            autoApply: $auto
+        );
 
         // Output overall summary
         $totalAssets   = 0;
