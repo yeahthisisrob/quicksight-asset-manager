@@ -13,7 +13,7 @@ use QSAssetManager\Command\Tagging\ScanAssetsCommand;
 use QSAssetManager\Command\Export\ExportAssetsCommand;
 use QSAssetManager\Command\Exploration\Dashboard\DeployDashboardCommand;
 use QSAssetManager\Command\Exploration\Analysis\DeployAnalysisCommand;
-use QSAssetManager\Command\Exploration\Dashboard\ExportDashboardViewCountsCommand; // Added new command
+use QSAssetManager\Command\Reporting\ExportDashboardViewCountsCommand;
 
 // Load global configuration
 $config = require PROJECT_ROOT . '/config/global.php';
@@ -29,6 +29,6 @@ $application->add(new ScanAssetsCommand());
 $application->add(new ExportAssetsCommand($config));
 $application->add(new DeployDashboardCommand());
 $application->add(new DeployAnalysisCommand());
-$application->add(new ExportDashboardViewCountsCommand()); // New command registered
+$application->add(new ExportDashboardViewCountsCommand());
 
 $application->run();
