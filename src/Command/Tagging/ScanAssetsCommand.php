@@ -19,7 +19,7 @@ class ScanAssetsCommand extends Command
         $this
             ->setDescription('Scan QuickSight assets and interactively tag them with groups')
             ->setHelp(
-                'This command scans your QuickSight assets and helps you assign group tags to them'
+                'This command scans your QuickSight assets and helps you assign group tags to them.'
             )
             ->addOption(
                 'dashboard',
@@ -38,12 +38,6 @@ class ScanAssetsCommand extends Command
                 'a',
                 InputOption::VALUE_NONE,
                 'Scan only analyses'
-            )
-            ->addOption(
-                'report',
-                'r',
-                InputOption::VALUE_NONE,
-                'Just generate a report without interactive tagging'
             );
     }
 
@@ -54,17 +48,8 @@ class ScanAssetsCommand extends Command
 
         // Load configuration
         $config       = require PROJECT_ROOT . '/config/global.php';
-        $awsRegion    = $config['awsRegion']    ?? 'us-west-2';
+        $awsRegion    = $config['awsRegion'] ?? 'us-west-2';
         $awsAccountId = $config['awsAccountId'] ?? '';
-
-        // If account ID is not in config, ask for it
-        if (empty($awsAccountId)) {
-            $awsAccountId = $io->ask('Enter AWS Account ID');
-            if (empty($awsAccountId)) {
-                $io->error('AWS Account ID is required');
-                return Command::FAILURE;
-            }
-        }
 
         // Create QuickSight client
         $qsClient = new QuickSightClient([
@@ -75,28 +60,17 @@ class ScanAssetsCommand extends Command
         // Create tagging manager
         $manager = new AssetTaggingManager($config, $qsClient, $awsAccountId, $awsRegion, $io);
 
-        // Check which assets to scan
+        // Determine which asset types to scan
         $dashboards = $input->getOption('dashboard');
         $datasets   = $input->getOption('dataset');
         $analyses   = $input->getOption('analysis');
 
-        // If none specified, scan all
+        // If none specified, scan all asset types
         if (!$dashboards && !$datasets && !$analyses) {
             $dashboards = $datasets = $analyses = true;
         }
 
-        // If report only, generate a report
-        if ($input->getOption('report')) {
-            if ($manager->exportAssetList()) {
-                $io->success('Asset report generated successfully');
-                return Command::SUCCESS;
-            } else {
-                $io->error('Failed to generate asset report');
-                return Command::FAILURE;
-            }
-        }
-
-        // Interactive scan
+        // Run interactive scan and tagging
         $stats = $manager->interactiveScan($dashboards, $datasets, $analyses);
 
         // Output overall summary
@@ -138,7 +112,7 @@ class ScanAssetsCommand extends Command
 
         if ($totalUntagged > 0) {
             $io->warning("$totalUntagged assets remain untagged");
-            $io->note('Run with --report option to generate a full asset report');
+            $io->note('Use the reporting:asset-report command to generate a full asset report.');
         } else {
             $io->success('All assets tagged successfully');
         }

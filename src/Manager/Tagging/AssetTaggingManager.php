@@ -2,21 +2,19 @@
 
 namespace QSAssetManager\Manager\Tagging;
 
-use Aws\QuickSight\QuickSightClient;
 use Aws\Exception\AwsException;
 use QSAssetManager\Utils\QuickSightHelper;
 use QSAssetManager\Utils\TaggingHelper;
-use Symfony\Component\Console\Style\SymfonyStyle;
 
 class AssetTaggingManager extends TaggingManager
 {
     /**
-     * Interactively scan and tag assets
+     * Interactively scan and tag assets.
      *
-     * @param bool $tagDashboards Whether to tag dashboards
-     * @param bool $tagDatasets Whether to tag datasets
-     * @param bool $tagAnalyses Whether to tag analyses
-     * @return array Statistics about the tagging operation
+     * @param bool $tagDashboards Whether to tag dashboards.
+     * @param bool $tagDatasets   Whether to tag datasets.
+     * @param bool $tagAnalyses   Whether to tag analyses.
+     * @return array Statistics about the tagging operation.
      */
     public function interactiveScan(
         bool $tagDashboards = true,
@@ -25,127 +23,117 @@ class AssetTaggingManager extends TaggingManager
     ): array {
         $stats = [
             'dashboards' => ['total' => 0, 'tagged' => 0, 'untagged' => []],
-            'datasets' => ['total' => 0, 'tagged' => 0, 'untagged' => []],
-            'analyses' => ['total' => 0, 'tagged' => 0, 'untagged' => []],
+            'datasets'   => ['total' => 0, 'tagged' => 0, 'untagged' => []],
+            'analyses'   => ['total' => 0, 'tagged' => 0, 'untagged' => []],
         ];
 
-        // Get folder information
+        // Get folder information and output folder group matches.
         $folders = $this->collectFolderInfo();
-        $this->outputFolderGroupMatches($folders);
+        $this->outputFolderGroupMatches(folders: $folders);
 
-        // Process dashboards
         if ($tagDashboards) {
-            $stats['dashboards'] = $this->scanAndTagDashboards($folders);
+            $stats['dashboards'] = $this->scanAndTagDashboards(folders: $folders);
         }
-
-        // Process datasets
         if ($tagDatasets) {
-            $stats['datasets'] = $this->scanAndTagDatasets($folders);
+            $stats['datasets'] = $this->scanAndTagDatasets(folders: $folders);
         }
-
-        // Process analyses
         if ($tagAnalyses) {
-            $stats['analyses'] = $this->scanAndTagAnalyses($folders);
+            $stats['analyses'] = $this->scanAndTagAnalyses(folders: $folders);
         }
 
-        // Output summary
-        $this->outputSummary($stats);
-
+        $this->outputSummary(stats: $stats);
         return $stats;
     }
 
     /**
-     * Output folder group matches based on names
+     * Output folder group matches based on names.
      */
     protected function outputFolderGroupMatches(array $folders): void
     {
         $folderNames = [];
         foreach ($folders as $memberArn => $folderList) {
             foreach ($folderList as $folderName) {
-                if (!isset($folderNames[$folderName])) {
-                    $folderNames[$folderName] = 0;
-                }
-                $folderNames[$folderName]++;
+                $folderNames[$folderName] = ($folderNames[$folderName] ?? 0) + 1;
             }
         }
-
         $groupMatches = [];
         foreach ($this->groups as $groupKey => $groupConfig) {
             $groupMatches[$groupKey] = 0;
         }
-
         foreach ($folderNames as $folderName => $count) {
-            $matchedGroup = TaggingHelper::determineGroupTag($folderName, $this->groups);
+            $matchedGroup = TaggingHelper::determineGroupTag(
+                $folderName,
+                $this->groups
+            );
             if ($matchedGroup) {
                 $groupMatches[$matchedGroup] += $count;
             }
         }
-
-        $this->output("Folder Group Matches:");
+        $this->output(message: "Folder Group Matches:");
         foreach ($groupMatches as $group => $count) {
             if ($count > 0) {
-                $this->output("  $group: $count folder members");
+                $this->output(message: "  $group: $count folder members");
             }
         }
     }
 
     /**
-     * Scan and tag dashboards
+     * Scan and tag dashboards.
      */
     protected function scanAndTagDashboards(array $folders): array
     {
         return $this->scanAndTagAssets(
-            $folders,
-            'dashboards',
-            'listDashboards',
-            'DashboardSummaryList',
-            'Dashboard',
-            'DashboardId'
+            folders:       $folders,
+            assetType:     'dashboards',
+            apiMethod:     'listDashboards',
+            resultKey:     'DashboardSummaryList',
+            assetTypeName: 'Dashboard',
+            idField:       'DashboardId'
         );
     }
 
     /**
-     * Scan and tag datasets
+     * Scan and tag datasets.
      */
     protected function scanAndTagDatasets(array $folders): array
     {
         return $this->scanAndTagAssets(
-            $folders,
-            'datasets',
-            'listDataSets',
-            'DataSetSummaries',
-            'Dataset',
-            'DataSetId',
-            true // Handle dataset-specific errors
+            folders:           $folders,
+            assetType:         'datasets',
+            apiMethod:         'listDataSets',
+            resultKey:         'DataSetSummaries',
+            assetTypeName:     'Dataset',
+            idField:           'DataSetId',
+            handleDatasetErrors: true
         );
     }
 
     /**
-     * Scan and tag analyses
+     * Scan and tag analyses.
      */
     protected function scanAndTagAnalyses(array $folders): array
     {
         return $this->scanAndTagAssets(
-            $folders,
-            'analyses',
-            'listAnalyses',
-            'AnalysisSummaryList',
-            'Analysis',
-            'AnalysisId'
+            folders:       $folders,
+            assetType:     'analyses',
+            apiMethod:     'listAnalyses',
+            resultKey:     'AnalysisSummaryList',
+            assetTypeName: 'Analysis',
+            idField:       'AnalysisId'
         );
     }
 
     /**
-     * Generic method to scan and tag QuickSight assets
+     * Generic method to scan and tag QuickSight assets.
      *
-     * @param array $folders Folder information
-     * @param string $assetType Type of asset (used in logging)
-     * @param string $apiMethod API method to list assets
-     * @param string $resultKey Key in the API result that contains the asset list
-     * @param string $assetTypeName User-friendly name of the asset type
-     * @param string $idField Field name that holds the asset ID
-     * @param bool $handleDatasetErrors Whether to handle dataset-specific errors
-     * @return array Statistics about the tagging operation
+     * @param array  $folders             Folder information.
+     * @param string $assetType           Type of asset (used in logging).
+     * @param string $apiMethod           API method to list assets.
+     * @param string $resultKey           Key in the API result that contains the asset list.
+     * @param string $assetTypeName       User-friendly name of the asset type.
+     * @param string $idField             Field name that holds the asset ID.
+     * @param bool   $handleDatasetErrors Whether to handle dataset-specific errors.
+     * @return array Statistics about the tagging operation.
      */
     protected function scanAndTagAssets(
         array $folders,
@@ -156,13 +144,12 @@ class AssetTaggingManager extends TaggingManager
         string $idField,
         bool $handleDatasetErrors = false
     ): array {
-        $assetCount = 0;
-        $taggedCount = 0;
+        $assetCount    = 0;
+        $taggedCount   = 0;
         $untaggedAssets = [];
-        $nextToken = null;
-
+        $nextToken     = null;
         $assetTypeName = ucfirst($assetTypeName);
-        $this->output("Scanning {$assetType}...");
+        $this->output(message: "Scanning {$assetType}...");
 
         do {
             $params = ['AwsAccountId' => $this->awsAccountId];
@@ -180,106 +167,117 @@ class AssetTaggingManager extends TaggingManager
                     $folderNames = isset($folders[$asset['Arn']])
                         ? implode(', ', $folders[$asset['Arn']])
                         : 'None';
-
-                    $tags = TaggingHelper::getResourceTags($this->quickSight, $asset['Arn']);
-                    $groupTag = TaggingHelper::getGroupTag($tags, $this->tagKey);
-
+                    $tags     = TaggingHelper::getResourceTags(
+                        $this->quickSight,
+                        $asset['Arn']
+                    );
+                    $groupTag = TaggingHelper::getGroupTag(
+                        tags:   $tags,
+                        tagKey: $this->tagKey
+                    );
                     if ($groupTag) {
                         $derivedTag = TaggingHelper::determineGroupTag(
                             $asset['Name'],
                             $this->groups,
                             $folderNames
                         );
-
                         if ($derivedTag && $derivedTag !== $groupTag) {
-                            $this->output("⚠ {$assetTypeName} #{$assetCount} {$asset[$idField]}", 'comment');
-                            $this->output("  Name: {$asset['Name']}");
-                            $this->output("  Folders: $folderNames");
-                            $this->output("  Current Group: '$groupTag'");
-
+                            $this->output(
+                                message: "⚠ {$assetTypeName} #{$assetCount} " .
+                                         "{$asset[$idField]}",
+                                type:    'comment'
+                            );
+                            $this->output(message: "  Name: {$asset['Name']}");
+                            $this->output(message: "  Folders: $folderNames");
+                            $this->output(message: "  Current Group: '$groupTag'");
                             if (
                                 !$this->handleAssetTagging(
-                                    $asset,
-                                    $idField,
-                                    $folderNames,
-                                    $derivedTag,
-                                    $taggedCount,
-                                    $untaggedAssets,
-                                    $handleDatasetErrors
+                                    asset:               $asset,
+                                    idField:             $idField,
+                                    folderNames:         $folderNames,
+                                    derivedTag:          $derivedTag,
+                                    taggedCount:         $taggedCount,
+                                    untaggedAssets:      $untaggedAssets,
+                                    handleDatasetErrors: $handleDatasetErrors
                                 )
                             ) {
                                 $untaggedAssets[] = [
                                     $asset[$idField],
                                     $asset['Name'],
-                                    $folderNames
+                                    $folderNames,
                                 ];
                             }
                         } else {
                             $this->output(
-                                "✓ {$assetTypeName} #{$assetCount} {$asset[$idField]} '{$asset['Name']}' " .
-                                "[{$this->tagKey}: $groupTag]",
-                                'success'
+                                message: "✓ {$assetTypeName} #{$assetCount} " .
+                                         "{$asset[$idField]} '{$asset['Name']}' " .
+                                         "[{$this->tagKey}: $groupTag]",
+                                type:    'success'
                             );
                         }
                     } else {
-                        $this->output("⚠ {$assetTypeName} #{$assetCount} {$asset[$idField]}", 'warning');
-                        $this->output("  Name: {$asset['Name']}");
-                        $this->output("  Folders: $folderNames");
-
+                        $this->output(
+                            message: "⚠ {$assetTypeName} #{$assetCount} " .
+                                     "{$asset[$idField]}",
+                            type:    'warning'
+                        );
+                        $this->output(message: "  Name: {$asset['Name']}");
+                        $this->output(message: "  Folders: $folderNames");
                         $derivedTag = TaggingHelper::determineGroupTag(
                             $asset['Name'],
                             $this->groups,
                             $folderNames
                         );
-
                         if (
                             !$this->handleAssetTagging(
-                                $asset,
-                                $idField,
-                                $folderNames,
-                                $derivedTag,
-                                $taggedCount,
-                                $untaggedAssets,
-                                $handleDatasetErrors
+                                asset:               $asset,
+                                idField:             $idField,
+                                folderNames:         $folderNames,
+                                derivedTag:          $derivedTag,
+                                taggedCount:         $taggedCount,
+                                untaggedAssets:      $untaggedAssets,
+                                handleDatasetErrors: $handleDatasetErrors
                             )
                         ) {
                             $untaggedAssets[] = [
                                 $asset[$idField],
                                 $asset['Name'],
-                                $folderNames
+                                $folderNames,
                             ];
                         }
                     }
                 }
-
                 $nextToken = $assetsResponse['NextToken'] ?? null;
             } catch (AwsException $e) {
-                $this->output("Error scanning {$assetType}: " . $e->getMessage(), 'error');
+                $this->output(
+                    message: "Error scanning {$assetType}: " . $e->getMessage(),
+                    type:    'error'
+                );
                 break;
             }
         } while ($nextToken);
-
         $singularType = substr($assetType, 0, -1);
-        $this->output(ucfirst($singularType) . " scan complete. Processed $assetCount {$assetType}.");
-
+        $this->output(
+            message: ucfirst($singularType) . " scan complete. Processed $assetCount {$assetType}."
+        );
         return [
-            'total' => $assetCount,
-            'tagged' => $taggedCount,
-            'untagged' => $untaggedAssets
+            'total'    => $assetCount,
+            'tagged'   => $taggedCount,
+            'untagged' => $untaggedAssets,
         ];
     }
 
     /**
-     * Handle the tagging process for a single asset
+     * Handle the tagging process for a single asset.
      *
-     * @param array $asset The asset data
-     * @param string $idField Field name that holds the asset ID
-     * @param string $folderNames Comma-separated folder names
-     * @param string|null $derivedTag Suggested tag value
-     * @param int &$taggedCount Reference to the tagged count to update
-     * @param array &$untaggedAssets Reference to the untagged assets array
-     * @param bool $handleDatasetErrors Whether to handle dataset-specific errors
-     * @return bool True if the asset was tagged, false otherwise
+     * @param array  $asset             The asset data.
+     * @param string $idField           Field name that holds the asset ID.
+     * @param string $folderNames       Comma-separated folder names.
+     * @param string|null $derivedTag     Suggested tag value.
+     * @param int    &$taggedCount      Reference to the tagged count.
+     * @param array  &$untaggedAssets   Reference to the untagged assets array.
+     * @param bool   $handleDatasetErrors Whether to handle dataset-specific errors.
+     * @return bool True if the asset was tagged, false otherwise.
      */
     protected function handleAssetTagging(
         array $asset,
@@ -291,15 +289,10 @@ class AssetTaggingManager extends TaggingManager
         bool $handleDatasetErrors = false
     ): bool {
         if ($derivedTag) {
-            $this->output("  Suggested Group: '$derivedTag'");
-
-            if ($this->io) {
-                $applyTag = $this->io->confirm("  Apply '$derivedTag'?", false);
-            } else {
-                $this->output("  Apply '$derivedTag'? (y/n): ");
-                $applyTag = strtolower(trim(fgets(STDIN))) === 'y';
-            }
-
+            $this->output(message: "  Suggested Group: '$derivedTag'");
+            $applyTag = $this->io
+                ? $this->io->confirm("  Apply '$derivedTag'?", false)
+                : (strtolower(trim(fgets(STDIN))) === 'y');
             if ($applyTag) {
                 try {
                     if (
@@ -312,59 +305,66 @@ class AssetTaggingManager extends TaggingManager
                         )
                     ) {
                         $taggedCount++;
-                        $this->output("  ✓ Tagged as '$derivedTag'", 'success');
+                        $this->output(
+                            message: "  ✓ Tagged as '$derivedTag'",
+                            type:    'success'
+                        );
                         return true;
                     } else {
-                        $this->output("  ✗ Failed to tag", 'error');
+                        $this->output(
+                            message: "  ✗ Failed to tag",
+                            type:    'error'
+                        );
                         return false;
                     }
                 } catch (AwsException $e) {
                     if ($handleDatasetErrors) {
                         $errorMessage = $e->getAwsErrorMessage() ?: $e->getMessage();
-                        if (strpos($errorMessage, 'The data set type is not supported through API yet') !== false) {
-                            $this->output("  ⚠ Skipped: Flat file dataset not supported by the API.", 'warning');
+                        if (strpos($errorMessage, 'The data set type is not supported') !== false) {
+                            $this->output(
+                                message: "  ⚠ Skipped: Flat file dataset not supported by the API.",
+                                type:    'warning'
+                            );
                         } else {
-                            $this->output("  ✗ Failed: " . $e->getMessage(), 'error');
+                            $this->output(
+                                message: "  ✗ Failed: " . $e->getMessage(),
+                                type:    'error'
+                            );
                         }
                     } else {
-                        $this->output("  ✗ Failed: " . $e->getMessage(), 'error');
+                        $this->output(
+                            message: "  ✗ Failed: " . $e->getMessage(),
+                            type:    'error'
+                        );
                     }
                     return false;
                 }
             } else {
-                // Try manual tagging
-                return $this->handleManualTagging($asset, $taggedCount);
+                return $this->handleManualTagging(asset: $asset, taggedCount: $taggedCount);
             }
         } else {
-            // No suggested tag, try manual
-            return $this->handleManualTagging($asset, $taggedCount);
+            return $this->handleManualTagging(asset: $asset, taggedCount: $taggedCount);
         }
     }
 
     /**
-     * Handle manual tagging for an asset
+     * Handle manual tagging for an asset.
      *
-     * @param array $asset The asset data
-     * @param int &$taggedCount Reference to the tagged count to update
-     * @return bool True if the asset was tagged, false otherwise
+     * @param array $asset         The asset data.
+     * @param int   &$taggedCount  Reference to the tagged count.
+     * @return bool True if the asset was tagged, false otherwise.
      */
-    protected function handleManualTagging(array $asset, int &$taggedCount): bool
-    {
-        if ($this->io) {
-            $manualTag = $this->io->confirm("  Manually tag '{$asset['Name']}'?", false);
-        } else {
-            $this->output("  Manually tag '{$asset['Name']}'? (y/n): ");
-            $manualTag = strtolower(trim(fgets(STDIN))) === 'y';
-        }
-
+    protected function handleManualTagging(
+        array $asset,
+        int &$taggedCount
+    ): bool {
+        $manualTag = $this->io
+            ? $this->io->confirm("  Manually tag '{$asset['Name']}'?", false)
+            : (strtolower(trim(fgets(STDIN))) === 'y');
         if ($manualTag) {
-            if ($this->io) {
-                $newTag = $this->io->ask("  Enter group tag");
-            } else {
-                $this->output("  Enter group tag: ");
-                $newTag = trim(fgets(STDIN));
-            }
-
+            $newTag = $this->io
+                ? $this->io->ask("  Enter group tag")
+                : trim(fgets(STDIN));
             if (!empty($newTag)) {
                 try {
                     if (
@@ -377,84 +377,49 @@ class AssetTaggingManager extends TaggingManager
                         )
                     ) {
                         $taggedCount++;
-                        $this->output("  ✓ Tagged as '$newTag'", 'success');
+                        $this->output(
+                            message: "  ✓ Tagged as '$newTag'",
+                            type:    'success'
+                        );
                         return true;
                     } else {
-                        $this->output("  ✗ Failed to tag", 'error');
+                        $this->output(
+                            message: "  ✗ Failed to tag",
+                            type:    'error'
+                        );
                         return false;
                     }
                 } catch (AwsException $e) {
-                    $this->output("  ✗ Failed: " . $e->getMessage(), 'error');
+                    $this->output(
+                        message: "  ✗ Failed: " . $e->getMessage(),
+                        type:    'error'
+                    );
                     return false;
                 }
             } else {
-                $this->output("  No tag provided. Skipped.");
+                $this->output(message: "  No tag provided. Skipped.");
                 return false;
             }
         } else {
-            $this->output("  Skipped.");
+            $this->output(message: "  Skipped.");
             return false;
         }
     }
 
     /**
-     * Output summary of tagging operations
+     * Output summary of tagging operations.
      */
     protected function outputSummary(array $stats): void
     {
-        $timestamp = date('Ymd_His');
-
-        $this->output("Summary:");
-
-        // Dashboards
-        $this->outputAssetTypeSummary('dashboards', $stats['dashboards'], $timestamp);
-
-        // Datasets
-        $this->outputAssetTypeSummary('datasets', $stats['datasets'], $timestamp);
-
-        // Analyses
-        $this->outputAssetTypeSummary('analyses', $stats['analyses'], $timestamp);
-    }
-
-    /**
-     * Output summary for a specific asset type
-     *
-     * @param string $assetType Type of asset
-     * @param array $stats Statistics for this asset type
-     * @param string $timestamp Timestamp for filename
-     */
-    protected function outputAssetTypeSummary(
-        string $assetType,
-        array $stats,
-        string $timestamp
-    ): void {
-        if ($stats['total'] > 0) {
-            $untaggedCount = count($stats['untagged']);
-            $this->output(
-                "  " . ucfirst($assetType) . ": {$stats['total']} total, {$stats['tagged']} tagged, " .
-                "$untaggedCount untagged"
-            );
-
-            if ($untaggedCount > 0) {
-                $reportDir = $this->config['paths']['report_export_path'] ?? (getcwd() . '/exports');
-                $reportDir = rtrim(string: $reportDir, characters: DIRECTORY_SEPARATOR);
-
-                if (!is_dir(filename: $reportDir)) {
-                    mkdir(directory: $reportDir, permissions: 0777, recursive: true);
-                }
-
-                $filename = "{$reportDir}/untagged_{$assetType}_{$timestamp}.csv";
-                $csv = fopen($filename, 'w');
-                fputcsv($csv, ['ID', 'Name', 'Folders'], ',', '"', '\\');
-                foreach ($stats['untagged'] as $asset) {
-                    fputcsv($csv, $asset, ',', '"', '\\');
-                }
-                fclose($csv);
-                $this->output(
-                    "  ⚠ Untagged " . ucfirst($assetType) . " saved to '$filename'",
-                    'warning'
-                );
-            }
-        }
+        $this->output(message: "Summary:");
+        $this->output(message: "  Dashboards: {$stats['dashboards']['total']} total, " .
+            "{$stats['dashboards']['tagged']} tagged, " .
+            count($stats['dashboards']['untagged']) . " untagged");
+        $this->output(message: "  Datasets: {$stats['datasets']['total']} total, " .
+            "{$stats['datasets']['tagged']} tagged, " .
+            count($stats['datasets']['untagged']) . " untagged");
+        $this->output(message: "  Analyses: {$stats['analyses']['total']} total, " .
+            "{$stats['analyses']['tagged']} tagged, " .
+            count($stats['analyses']['untagged']) . " untagged");
     }
 }
