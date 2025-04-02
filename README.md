@@ -76,21 +76,23 @@ Options:
   -n, --no-interaction  Do not ask any interactive question
   -v|vv|vvv, --verbose  Increase the verbosity of messages: 1 for normal output, 2 for more verbose output and 3 for debug
 Available commands:
-  completion                        Dump the shell completion script
-  help                              Display help for a command
-  list                              List commands
+  completion                              Dump the shell completion script
+  help                                    Display help for a command
+  list                                    List commands
  analysis
-  analysis:deploy                   Deploy a QuickSight analysis using a combined deployment config JSON file.
-  analysis:remove-broken-datasets   Remove broken DataSetIdentifiers from a QuickSight analysis.
-  analysis:rename                   Rename an existing QuickSight analysis.
+  analysis:deploy                         Deploy a QuickSight analysis using a combined deployment config JSON file.
+  analysis:remove-broken-datasets         Remove broken DataSetIdentifiers from a QuickSight analysis.
+  analysis:rename                         Rename an existing QuickSight analysis.
  assets
-  assets:export                     Export QuickSight dashboards and datasets
-  assets:scan                       Scan QuickSight assets and interactively tag them with groups
+  assets:scan                             Scan QuickSight assets and interactively tag them with groups
  dashboard
-  dashboard:deploy                  Deploy a QuickSight dashboard using a combined deployment config JSON file.
-  dashboard:export-view-counts      Export dashboard view counts based on CloudTrail events.
-  dashboard:remove-broken-datasets  Remove broken DataSetIdentifiers from a QuickSight dashboard.
-  dashboard:rename                  Rename an existing QuickSight dashboard.
+  dashboard:deploy                        Deploy a QuickSight dashboard using a combined deployment config JSON file.
+  dashboard:remove-broken-datasets        Remove broken DataSetIdentifiers from a QuickSight dashboard.
+  dashboard:rename                        Rename an existing QuickSight dashboard.
+ reporting
+  reporting:asset-report                  Generate a CSV report of QuickSight assets with folder, permission, and tag details.
+  reporting:export-dashboard-view-counts  Export dashboard view counts report based on CloudTrail events.
+  reporting:user-report                   Generate a CSV report of QuickSight users with metadata and embed stats.
 ```
 
 For detailed help on any specific command, use:

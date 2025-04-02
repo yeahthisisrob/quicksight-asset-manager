@@ -10,10 +10,10 @@ class CloudTrailHelper
     /**
      * Executes a CloudTrail API call with retry logic for throttling.
      *
-     * @param CloudTrailClient $client The CloudTrail client.
-     * @param string $method The API method to call.
-     * @param array $params The parameters for the API call.
-     * @param int $maxRetries Maximum number of retry attempts.
+     * @param  CloudTrailClient  $client      The CloudTrail client.
+     * @param  string            $method      The API method to call.
+     * @param  array             $params      The parameters for the API call.
+     * @param  int               $maxRetries  Maximum number of retry attempts.
      * @return mixed The response from the API call.
      * @throws AwsException
      */
@@ -28,11 +28,10 @@ class CloudTrailHelper
             try {
                 return $client->$method($params);
             } catch (AwsException $e) {
-                if (
-                    ($e->getAwsErrorCode() === 'ThrottlingException' ||
-                    $e->getAwsErrorCode() === 'RateExceededException') &&
-                    $attempt < $maxRetries
-                ) {
+                $isThrottling = $e->getAwsErrorCode() === 'ThrottlingException' ||
+                                $e->getAwsErrorCode() === 'RateExceededException';
+
+                if ($isThrottling && $attempt < $maxRetries) {
                     $attempt++;
                     $delay = (2 ** $attempt) * 1000 + rand(0, 1000);
                     echo "\033[33m⚠ Throttling on $method. Retry #$attempt in " . ($delay / 1000) . "s...\033[0m\n";
@@ -48,9 +47,9 @@ class CloudTrailHelper
     /**
      * Lookup CloudTrail events with pagination.
      *
-     * @param CloudTrailClient $client The CloudTrail client.
-     * @param array $params The parameters for the lookupEvents call.
-     * @param callable|null $progressCallback Optional callback to report progress (receives current page number).
+     * @param  CloudTrailClient  $client           The CloudTrail client.
+     * @param  array             $params           The parameters for the lookupEvents call.
+     * @param  callable|null     $progressCallback Optional callback for progress updates.
      * @return array The aggregated events.
      */
     public static function lookupEventsPaginated(
@@ -61,30 +60,36 @@ class CloudTrailHelper
         $allEvents = [];
         $nextToken = null;
         $page      = 0;
+
         do {
             if ($nextToken) {
                 $params['NextToken'] = $nextToken;
             }
+
             $response = self::executeWithRetry($client, 'lookupEvents', $params);
+
             if (isset($response['Events'])) {
                 $allEvents = array_merge($allEvents, $response['Events']);
             }
+
             $page++;
             if ($progressCallback) {
                 call_user_func($progressCallback, $page);
             }
+
             $nextToken = $response['NextToken'] ?? null;
         } while ($nextToken);
+
         return $allEvents;
     }
 
     /**
      * Lookup CloudTrail events for QuickSight Dashboard embed URL events within a specified time range.
      *
-     * @param CloudTrailClient $client The CloudTrail client.
-     * @param \DateTimeImmutable $startTime Start time.
-     * @param \DateTimeImmutable $endTime End time.
-     * @param callable|null $progressCallback Optional callback for progress updates.
+     * @param  CloudTrailClient     $client           The CloudTrail client.
+     * @param  \DateTimeImmutable   $startTime        Start time.
+     * @param  \DateTimeImmutable   $endTime          End time.
+     * @param  callable|null        $progressCallback Optional callback for progress updates.
      * @return array The events found.
      */
     public static function lookupDashboardEvents(
@@ -103,13 +108,14 @@ class CloudTrailHelper
             'StartTime' => $startTime->format(\DateTime::ATOM),
             'EndTime'   => $endTime->format(\DateTime::ATOM),
         ];
+
         return self::lookupEventsPaginated($client, $params, $progressCallback);
     }
 
     /**
      * Extracts the dashboard ID from a CloudTrail event.
      *
-     * @param array $ctEvent The decoded CloudTrail event.
+     * @param  array  $ctEvent  The decoded CloudTrail event.
      * @return string|null The dashboard ID if found.
      */
     public static function extractDashboardIdFromEvent(array $ctEvent): ?string
@@ -117,9 +123,13 @@ class CloudTrailHelper
         if (isset($ctEvent['requestParameters']['dashboardId'])) {
             return $ctEvent['requestParameters']['dashboardId'];
         }
+
         if (isset($ctEvent['resources']) && is_array($ctEvent['resources'])) {
             foreach ($ctEvent['resources'] as $resource) {
-                if (isset($resource['resourceType']) && $resource['resourceType'] === 'AWS::QuickSight::Dashboard') {
+                $isQuickSightDashboard = isset($resource['resourceType']) &&
+                                        $resource['resourceType'] === 'AWS::QuickSight::Dashboard';
+
+                if ($isQuickSightDashboard) {
                     if (isset($resource['resourceName']) && strpos($resource['resourceName'], 'dashboard/') !== false) {
                         $parts = explode("dashboard/", $resource['resourceName']);
                         return end($parts);
@@ -127,13 +137,14 @@ class CloudTrailHelper
                 }
             }
         }
+
         return null;
     }
 
     /**
      * Extracts a username from a user ARN.
      *
-     * @param string $userArn The user ARN.
+     * @param  string  $userArn  The user ARN.
      * @return string The extracted username.
      */
     public static function extractUsernameFromArn(string $userArn): string
