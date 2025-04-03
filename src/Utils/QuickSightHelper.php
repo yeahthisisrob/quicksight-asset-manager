@@ -4,6 +4,7 @@ namespace QSAssetManager\Utils;
 
 use Aws\QuickSight\QuickSightClient;
 use Aws\Exception\AwsException;
+use GuzzleHttp\Promise\Utils;
 
 class QuickSightHelper
 {
@@ -474,5 +475,162 @@ class QuickSightHelper
                 }
             }
         }
+    }
+
+    /**
+     * List all folders.
+     */
+    public static function listAllFolders(
+        QuickSightClient $client,
+        string $awsAccountId
+    ): array {
+        $all       = [];
+        $nextToken = null;
+        do {
+            $params = ['AwsAccountId' => $awsAccountId];
+            if ($nextToken) {
+                $params['NextToken'] = $nextToken;
+            }
+            $resp      = self::executeWithRetry(
+                client:      $client,
+                method:      'listFolders',
+                params:      $params
+            );
+            $folders   = $resp['FolderSummaryList'] ?? [];
+            $all       = array_merge($all, $folders);
+            $nextToken = $resp['NextToken'] ?? null;
+        } while ($nextToken);
+        return $all;
+    }
+
+    /**
+     * Get folder hierarchy mapping.
+     * Returns mapping: FolderArn => "Parent / ... / FolderName"
+     */
+    public static function getFolderHierarchyMapping(
+        QuickSightClient $client,
+        string $awsAccountId,
+        int $maxConcurrent = 5
+    ): array {
+        $folders = self::listAllFolders(
+            client:      $client,
+            awsAccountId: $awsAccountId
+        );
+        $map = [];
+        foreach ($folders as $folder) {
+            $folderArn = $folder['Arn'] ?? null;
+            if ($folderArn) {
+                $map[$folderArn] = $folder['Name'] ?? '';
+            }
+        }
+        $results  = [];
+        $promises = [];
+        $batches  = array_chunk($folders, $maxConcurrent);
+        foreach ($batches as $batch) {
+            foreach ($batch as $folder) {
+                $folderId  = $folder['FolderId'];
+                $folderArn = $folder['Arn'] ?? null;
+                if (!$folderArn) {
+                    continue;
+                }
+                $promises[$folderId] = $client->describeFolderAsync([
+                    'AwsAccountId' => $awsAccountId,
+                    'FolderId'     => $folderId
+                ]);
+            }
+            $settled = Utils::settle($promises)->wait();
+            foreach ($settled as $folderId => $result) {
+                $folder = null;
+                foreach ($batch as $f) {
+                    if ($f['FolderId'] === $folderId) {
+                        $folder = $f;
+                        break;
+                    }
+                }
+                if (!$folder) {
+                    continue;
+                }
+                $folderArn = $folder['Arn'] ?? null;
+                if (!$folderArn) {
+                    continue;
+                }
+                if ($result['state'] === 'fulfilled') {
+                    $desc      = $result['value'];
+                    $path      = $desc['Folder']['FolderPath'] ?? [];
+                    $hierarchy = [];
+                    foreach ($path as $parentArn) {
+                        $hierarchy[] = $map[$parentArn] ?? '';
+                    }
+                    $hierarchy[] = $map[$folderArn] ?? '';
+                    $results[$folderArn] = implode(' / ', array_filter($hierarchy));
+                }
+            }
+            $promises = [];
+        }
+        return $results;
+    }
+
+    /**
+     * Get asset folder mapping.
+     * Returns mapping: ResourceArn => array of folder hierarchy strings.
+     */
+    public static function getAssetFolderMapping(
+        QuickSightClient $client,
+        string $awsAccountId,
+        int $maxConcurrent = 5
+    ): array {
+        $folders = self::listAllFolders(
+            client:      $client,
+            awsAccountId: $awsAccountId
+        );
+        $hierMap = self::getFolderHierarchyMapping(
+            client:       $client,
+            awsAccountId:  $awsAccountId,
+            maxConcurrent: $maxConcurrent
+        );
+        // Build folderId -> FolderArn mapping.
+        $idToArn = [];
+        foreach ($folders as $folder) {
+            if (isset($folder['FolderId'], $folder['Arn'])) {
+                $idToArn[$folder['FolderId']] = $folder['Arn'];
+            }
+        }
+        $assetMap = [];
+        $promises = [];
+        $batches  = array_chunk($folders, $maxConcurrent);
+        foreach ($batches as $batch) {
+            foreach ($batch as $folder) {
+                $folderId = $folder['FolderId'];
+                $promises[$folderId] = $client->listFolderMembersAsync([
+                    'AwsAccountId' => $awsAccountId,
+                    'FolderId'     => $folderId
+                ]);
+            }
+            $settled = Utils::settle($promises)->wait();
+            foreach ($settled as $folderId => $result) {
+                if ($result['state'] !== 'fulfilled') {
+                    continue;
+                }
+                $members   = $result['value']['FolderMemberList'] ?? [];
+                $folderArn = $idToArn[$folderId] ?? null;
+                if (!$folderArn) {
+                    continue;
+                }
+                $folderHierarchyString = $hierMap[$folderArn] ?? "[MISSING: {$folderArn}]";
+
+                foreach ($members as $member) {
+                    $memberArn = $member['MemberArn'] ?? null;
+                    if (!$memberArn) {
+                        continue;
+                    }
+                    if (!isset($assetMap[$memberArn])) {
+                        $assetMap[$memberArn] = [];
+                    }
+                    $assetMap[$memberArn][] = $folderHierarchyString;
+                }
+            }
+            $promises = [];
+        }
+        return $assetMap;
     }
 }
