@@ -8,21 +8,26 @@ QSAssetManager streamlines QuickSight maintenance operations through API automat
 
 ## Core Capabilities
 
-- **Asset Modification**
-  - Update dashboard and analysis names via API
-  - Clean up invalid dataset references with automatic detection
-  - Preserve asset history while creating new versions
+### Asset Modification
+- Update dashboard and analysis names via API
+- Clean up invalid dataset references with automatic detection
+- Preserve asset history while creating new versions
 
-- **Deployment Automation**
-  - Deploy dashboards and analyses from JSON templates
-  - Map dataset identifiers between environments
-  - Apply permissions, tags, and custom string replacements
+### Deployment Automation
+- Deploy dashboards and analyses from JSON templates
+- Map dataset identifiers between environments
+- Apply permissions, tags, and custom string replacements
 
-- **Asset Administration**
-  - Interactive and automated asset tagging
-  - CloudTrail-based dashboard usage analytics
-  - Comprehensive asset inventory reporting
-  - Folder-based organization scanning
+### Asset Administration
+- Interactive and automated asset tagging
+- Detect and remove inactive QuickSight users (with protection and dry-run options)
+- Folder-based organization scanning
+
+### Reporting
+- Export dashboard view counts with activity metadata
+- Generate comprehensive asset inventory reports (dashboards, datasets, analyses)
+- Export full user reports with activity, groups, and tags
+
 
 ## Requirements
 
@@ -93,6 +98,8 @@ Available commands:
   reporting:asset-report                  Generate a CSV report of QuickSight assets with folder, permission, and tag details.
   reporting:export-dashboard-view-counts  Export dashboard view counts report based on CloudTrail events.
   reporting:user-report                   Generate a CSV report of QuickSight users with metadata and embed stats.
+ users
+  users:delete-inactive                   Find and delete inactive QuickSight users
 ```
 
 For detailed help on any specific command, use:
@@ -140,10 +147,27 @@ php bin/console assets:scan
 php bin/console assets:scan --dashboard  # Only dashboards
 php bin/console assets:scan --dataset    # Only datasets
 php bin/console assets:scan --analysis   # Only analyses
-
-# Generate comprehensive asset report
-php bin/console assets:scan --report
 ```
+
+### Reporting
+
+```bash
+# Export folder-aware asset report (dashboards, datasets, analyses)
+php bin/console report:assets [outputPath]
+
+# Export dashboard view counts report
+php bin/console report:dashboard-views [outputPath]
+
+# Export user activity report (optional: include groups and tags)
+php bin/console report:users [outputPath] [--with-groups] [--with-tags]
+```
+### User Management
+
+```
+# Find and (optionally) delete inactive QuickSight users
+php bin/console user:prune-inactive [--dry-run] [--force]
+```
+
 
 ## Technical Details
 
@@ -270,23 +294,31 @@ php bin/console dashboard:export-view-counts [outputPath]
 ```
 qs-asset-manager/
 ├── bin/
-│   └── console                  # Main command-line entry point
+│   └── console                       # Main command-line entry point
 ├── config/
-│   ├── global.example.php       # Template configuration
-│   ├── global.php               # Your custom configuration
-│   ├── groups.example.php       # Template for tagging groups
-│   └── groups.php               # Your tagging configuration
+│   ├── global.example.php            # Template configuration
+│   ├── global.php                    # Your custom configuration
+│   ├── groups.example.php            # Template for tagging groups
+│   ├── groups.php                    # Your tagging configuration
+│   ├── user_management.example.php   # Template for user management configuration
+│   └── user_management.php           # Your user management configuration
 ├── src/
-│   ├── Command/                 # CLI commands
-│   │   ├── Exploration/         # Dashboard/Analysis commands
-│   │   └── Tagging/             # Asset tagging commands
-│   ├── Manager/                 # Core business logic
-│   │   ├── Exploration/
-│   │   └── Tagging/
-│   └── Utils/                   # Helper utilities
-├── exports/                     # Default output directory
-├── templates/                   # Template storage
-├── vendor/                      # Composer dependencies
+│   ├── Command/                      # CLI commands
+│   │   ├── Exploration/              # Dashboard/Analysis commands
+│   │   ├── Export/                   # Export-related commands
+│   │   ├── Reporting/                # Reporting commands
+│   │   ├── Tagging/                  # Asset tagging commands
+│   │   └── User/                     # User management commands
+│   ├── Manager/                      # Core business logic
+│   │   ├── Exploration/              # Dashboard/Analysis management
+│   │   ├── Export/                   # Export management
+│   │   ├── Reporting/                # Reporting management
+│   │   ├── Tagging/                  # Asset tagging management
+│   │   └── User/                     # User management
+│   └── Utils/                        # Helper utilities
+├── exports/                          # Default output directory for generated reports
+├── templates/                        # Template storage
+├── vendor/                           # Composer dependencies
 ├── composer.json
 └── README.md
 ```
