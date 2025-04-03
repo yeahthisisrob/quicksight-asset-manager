@@ -60,6 +60,7 @@ Thumbs.db
 # Configuration (Sensitive)
 /config/global.php
 /config/groups.php
+/config/user_management.php
 /config/*.local.php
 
 # =========================================

@@ -37,4 +37,7 @@ return [
         'default_key'        => 'customer', // Default tag used if none provided
         'groups_config_file' => __DIR__ . '/groups.php', // Path to the groups configuration file
     ],
+    'user_management' => [
+        'config_file' => __DIR__ . '/user_management.php', // Path to the user management configuration
+    ]
 ];

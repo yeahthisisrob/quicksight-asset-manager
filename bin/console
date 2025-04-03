@@ -11,6 +11,7 @@ use QSAssetManager\Command\Exploration\Analysis\DeployAnalysisCommand;
 use QSAssetManager\Command\Exploration\Dashboard\RenameDashboardCommand;
 use QSAssetManager\Command\Exploration\Dashboard\RemoveBrokenDashboardDataSetsCommand;
 use QSAssetManager\Command\Exploration\Dashboard\DeployDashboardCommand;
+use QSAssetManager\Command\User\DeleteInactiveUsersCommand;
 use QSAssetManager\Command\Tagging\ScanAssetsCommand;
 use QSAssetManager\Command\Reporting\ExportAssetReportCommand;
 use QSAssetManager\Command\Reporting\ExportDashboardViewCountsCommand;
@@ -32,5 +33,6 @@ $application->add(new ScanAssetsCommand());
 $application->add(new ExportAssetReportCommand());
 $application->add(new ExportDashboardViewCountsCommand());
 $application->add(new ExportUserReportCommand());
+$application->add(new DeleteInactiveUsersCommand());
 
 $application->run();

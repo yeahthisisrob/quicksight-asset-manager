@@ -152,4 +152,182 @@ class CloudTrailHelper
         $parts = explode("user/default/", $userArn);
         return count($parts) === 2 ? end($parts) : $userArn;
     }
+
+    /**
+ * Lookup CloudTrail events for a specific QuickSight user within a time range.
+ *
+ * @param  CloudTrailClient     $client           The CloudTrail client.
+ * @param  string               $userArn          The user ARN to lookup.
+ * @param  \DateTimeImmutable   $startTime        Start time.
+ * @param  \DateTimeImmutable   $endTime          End time.
+ * @param  callable|null        $progressCallback Optional callback for progress updates.
+ * @return array The events found.
+ */
+    public static function lookupUserEvents(
+        CloudTrailClient $client,
+        string $userArn,
+        \DateTimeImmutable $startTime,
+        \DateTimeImmutable $endTime,
+        ?callable $progressCallback = null
+    ): array {
+        $params = [
+        'LookupAttributes' => [
+            [
+                'AttributeKey'   => 'Username',
+                'AttributeValue' => self::extractUsernameFromArn($userArn)
+            ]
+        ],
+        'StartTime' => $startTime->format(\DateTime::ATOM),
+        'EndTime'   => $endTime->format(\DateTime::ATOM),
+        ];
+
+        return self::lookupEventsPaginated($client, $params, $progressCallback);
+    }
+
+/**
+ * Lookup CloudTrail events for QuickSight service within a specified time range.
+ *
+ * @param  CloudTrailClient     $client           The CloudTrail client.
+ * @param  \DateTimeImmutable   $startTime        Start time.
+ * @param  \DateTimeImmutable   $endTime          End time.
+ * @param  callable|null        $progressCallback Optional callback for progress updates.
+ * @return array The events found.
+ */
+    public static function lookupQuickSightEvents(
+        CloudTrailClient $client,
+        \DateTimeImmutable $startTime,
+        \DateTimeImmutable $endTime,
+        ?callable $progressCallback = null
+    ): array {
+        $params = [
+        'LookupAttributes' => [
+            [
+                'AttributeKey'   => 'EventSource',
+                'AttributeValue' => 'quicksight.amazonaws.com'
+            ]
+        ],
+        'StartTime' => $startTime->format(\DateTime::ATOM),
+        'EndTime'   => $endTime->format(\DateTime::ATOM),
+        ];
+
+        return self::lookupEventsPaginated($client, $params, $progressCallback);
+    }
+
+    /**
+     * Get a list of active users based on QuickSight events in CloudTrail.
+     *
+     * @param  CloudTrailClient     $client           The CloudTrail client.
+     * @param  \DateTimeImmutable   $startTime        Start time.
+     * @param  \DateTimeImmutable   $endTime          End time.
+     * @param  callable|null        $progressCallback Optional callback for progress updates.
+     * @return array Associative array of user ARNs to their last activity timestamp.
+     */
+    public static function getActiveQuickSightUsers(
+        CloudTrailClient $client,
+        \DateTimeImmutable $startTime,
+        \DateTimeImmutable $endTime,
+        ?callable $progressCallback = null
+    ): array {
+        $events = self::lookupQuickSightEvents($client, $startTime, $endTime, $progressCallback);
+
+        $activeUsers = [];
+        foreach ($events as $event) {
+            if (isset($event['UserIdentity']['Arn']) && strpos($event['UserIdentity']['Arn'], ':user/') !== false) {
+                $userArn = $event['UserIdentity']['Arn'];
+                $eventTime = $event['EventTime'] ?? null;
+
+                if ($eventTime) {
+                    // Track the most recent activity for each user
+                    if (!isset($activeUsers[$userArn]) || $eventTime > $activeUsers[$userArn]) {
+                        $activeUsers[$userArn] = $eventTime;
+                    }
+                }
+            }
+        }
+
+        return $activeUsers;
+    }
+
+    /**
+     * Lookup CloudTrail events for specified QuickSight event names.
+     *
+     * @param  CloudTrailClient     $client           The CloudTrail client.
+     * @param  array                $eventNames       List of event names to look for.
+     * @param  \DateTimeImmutable   $startTime        Start time.
+     * @param  \DateTimeImmutable   $endTime          End time.
+     * @param  callable|null        $progressCallback Optional callback for progress updates.
+     * @return array The events found.
+     */
+    public static function lookupQuickSightEventsByName(
+        CloudTrailClient $client,
+        array $eventNames,
+        \DateTimeImmutable $startTime,
+        \DateTimeImmutable $endTime,
+        ?callable $progressCallback = null
+    ): array {
+        $allEvents = [];
+
+        foreach ($eventNames as $eventName) {
+            $params = [
+                'LookupAttributes' => [
+                    [
+                        'AttributeKey'   => 'EventName',
+                        'AttributeValue' => $eventName
+                    ]
+                ],
+                'StartTime' => $startTime->format(\DateTime::ATOM),
+                'EndTime'   => $endTime->format(\DateTime::ATOM),
+            ];
+
+            $events = self::lookupEventsPaginated($client, $params, $progressCallback);
+            $allEvents = array_merge($allEvents, $events);
+        }
+
+        return $allEvents;
+    }
+
+    /**
+     * Extract user ARNs from CloudTrail events.
+     * Extracts user ARNs from both userIdentity and requestParameters.
+     *
+     * @param array $events The CloudTrail events to process
+     * @return array Associative array of unique user ARNs
+     */
+    public static function extractUserArnsFromEvents(array $events): array
+    {
+        $userArns = [];
+
+        foreach ($events as $event) {
+            // Extract from standard UserIdentity field
+            if (isset($event['UserIdentity']['Arn'])) {
+                $userArn = $event['UserIdentity']['Arn'];
+                if (strpos($userArn, ':user/') !== false) {
+                    $userArns[$userArn] = true;
+                }
+            }
+
+            // Extract from CloudTrailEvent field (used in UserReportingManager)
+            if (!empty($event['CloudTrailEvent'])) {
+                $ct = json_decode($event['CloudTrailEvent'], true);
+
+                // Check userIdentity in CloudTrailEvent
+                if (isset($ct['userIdentity']['arn'])) {
+                    $userArn = $ct['userIdentity']['arn'];
+                    if (strpos($userArn, ':user/') !== false) {
+                        $userArns[$userArn] = true;
+                    }
+                }
+
+                // Check requestParameters in CloudTrailEvent (used in UserReportingManager)
+                if (isset($ct['requestParameters']['userArn'])) {
+                    $userArn = $ct['requestParameters']['userArn'];
+                    if (strpos($userArn, ':user/') !== false) {
+                        $userArns[$userArn] = true;
+                    }
+                }
+            }
+        }
+
+        return $userArns;
+    }
 }
