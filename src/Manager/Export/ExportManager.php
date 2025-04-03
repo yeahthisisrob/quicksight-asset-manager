@@ -806,11 +806,17 @@ class ExportManager
         ];
 
         if ($performCleanup) {
-            foreach ($results as $assetType => $exportedIds) {
-                $this->cleanupAssets(
-                    assetType: $assetType,
-                    validIds: $exportedIds
-                );
+            // Ensure we have a valid base directory for cleanup
+            $baseDir = $this->getResolvedBaseDir();
+            if (!is_dir($baseDir)) {
+                $this->outputMessage("Skipping cleanup - base directory doesn't exist: $baseDir", 'warning');
+            } else {
+                foreach ($results as $assetType => $exportedIds) {
+                    $this->cleanupAssets(
+                        assetType: $assetType,
+                        validIds: $exportedIds
+                    );
+                }
             }
         }
 
@@ -825,33 +831,52 @@ class ExportManager
      * @param string $assetType Type of asset to clean up.
      * @param array $validIds Valid asset IDs.
      */
+/**
+ * Cleanup stale assets.
+ *
+ * @param string $assetType Type of asset to clean up.
+ * @param array $validIds Valid asset IDs.
+ */
     public function cleanupAssets(string $assetType, array $validIds): void
     {
         $this->outputMessage("Running cleanup scan for $assetType...", 'info');
 
+        // Use the resolved base directory instead of the template with placeholders
+        $baseDir = $this->getResolvedBaseDir();
+
+        if (!is_dir($baseDir)) {
+            $this->outputMessage("Base directory doesn't exist: $baseDir", 'error');
+            return;
+        }
+
         $staleFound = false;
-        $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($this->baseDir, \RecursiveDirectoryIterator::SKIP_DOTS),
-            \RecursiveIteratorIterator::SELF_FIRST
-        );
+        try {
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($baseDir, \RecursiveDirectoryIterator::SKIP_DOTS),
+                \RecursiveIteratorIterator::SELF_FIRST
+            );
 
-        foreach ($iterator as $file) {
-            // Only process JSON files in asset type directories.
-            // Skip files in 'archived' directories using regex
-            if (
-                $file->isFile()
-                && $file->getExtension() === 'json'
-                && strpos($file->getPath(), "/{$assetType}") !== false
-                && !preg_match('#/archived($|/)#', $file->getPath())
-            ) {
-                $assetId = basename($file->getFilename(), '.json');
+            foreach ($iterator as $file) {
+                // Only process JSON files in asset type directories.
+                // Skip files in 'archived' directories using regex
+                if (
+                    $file->isFile()
+                    && $file->getExtension() === 'json'
+                    && strpos($file->getPath(), "/{$assetType}") !== false
+                    && !preg_match('#/archived($|/)#', $file->getPath())
+                ) {
+                    $assetId = basename($file->getFilename(), '.json');
 
-                // If the asset ID is not in the valid list, handle as a stale asset.
-                if (!in_array($assetId, $validIds)) {
-                    $this->handleStaleAsset($file);
-                    $staleFound = true;
+                    // If the asset ID is not in the valid list, handle as a stale asset.
+                    if (!in_array($assetId, $validIds)) {
+                        $this->handleStaleAsset($file);
+                        $staleFound = true;
+                    }
                 }
             }
+        } catch (\Exception $e) {
+            $this->outputMessage("Error during cleanup: " . $e->getMessage(), 'error');
+            return;
         }
 
         if (!$staleFound) {
@@ -910,25 +935,25 @@ class ExportManager
      */
     private function archiveAsset(\SplFileInfo $file): void
     {
-        // Ensure we always archive to the immediate parent /archived
-        $parentDir   = dirname($file->getPath());
-        $archiveDir  = $parentDir . DIRECTORY_SEPARATOR . 'archived';
-
+        // Use the current directory (which should be the asset type directory)
+        $currentDir = $file->getPath();
+        $archiveDir = $currentDir . DIRECTORY_SEPARATOR . 'archived';
+    
         // Create archive directory if it doesn't exist
-        if (!is_dir(filename: $archiveDir)) {
-            mkdir(directory: $archiveDir, permissions: 0777, recursive: true);
+        if (!is_dir($archiveDir)) {
+            mkdir($archiveDir, 0777, true);
         }
-
+    
         $archivePath = $archiveDir . DIRECTORY_SEPARATOR . $file->getFilename();
-
+    
         try {
-            if (rename(from: $file->getPathname(), to: $archivePath)) {
-                $this->outputMessage(message: "Archived: {$file->getPathname()} → $archivePath", type: 'success');
+            if (rename($file->getPathname(), $archivePath)) {
+                $this->outputMessage("Archived: {$file->getPathname()} → $archivePath", 'success');
             } else {
-                $this->outputMessage(message: "Failed to archive: {$file->getPathname()}", type: 'error');
+                $this->outputMessage("Failed to archive: {$file->getPathname()}", 'error');
             }
         } catch (\Exception $e) {
-            $this->outputMessage(message: "Error archiving: " . $e->getMessage(), type: 'error');
+            $this->outputMessage("Error archiving: " . $e->getMessage(), 'error');
         }
     }
 
