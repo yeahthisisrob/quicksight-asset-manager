@@ -31,7 +31,7 @@ class AssetTaggingManager extends TaggingManager
 
         // Debug: Add initial output
         $this->output(message: "Starting asset folder mapping...");
-        
+
         try {
             // Use new asset folder mapping (caching folder ARNs and full hierarchy)
             $folderMapping = QuickSightHelper::getAssetFolderMapping(
@@ -39,17 +39,20 @@ class AssetTaggingManager extends TaggingManager
                 awsAccountId: $this->awsAccountId,
                 maxConcurrent: 5
             );
-            
+
             // Debug: Output folder mapping count
             $this->output(message: "Got folder mapping with " . count($folderMapping) . " entries.");
-            
+
             // Handle empty folder mapping gracefully
             if (empty($folderMapping)) {
-                $this->output(message: "Warning: No folder mappings found. This is unusual but will continue.", type: 'warning');
+                $this->output(
+                    message: "Warning: No folder mappings found. This is unusual but will continue.",
+                    type: 'warning'
+                );
             }
-            
+
             $this->outputFolderGroupMatches(folderMapping: $folderMapping);
-            
+
             $this->output(message: "Folder group matching completed successfully.");
 
             if ($tagDashboards) {
@@ -58,14 +61,14 @@ class AssetTaggingManager extends TaggingManager
                     autoApply: $autoApply
                 );
             }
-            
+
             if ($tagDatasets) {
                 $stats['datasets'] = $this->scanAndTagDatasets(
                     folders:   $folderMapping,
                     autoApply: $autoApply
                 );
             }
-            
+
             if ($tagAnalyses) {
                 $stats['analyses'] = $this->scanAndTagAnalyses(
                     folders:   $folderMapping,
@@ -75,7 +78,6 @@ class AssetTaggingManager extends TaggingManager
 
             $this->outputSummary(stats: $stats);
             return $stats;
-            
         } catch (\Exception $e) {
             $this->output(
                 message: "Critical error in scanning process: " . $e->getMessage(),
@@ -92,34 +94,40 @@ class AssetTaggingManager extends TaggingManager
     {
         try {
             $this->output(message: "Folder Group Matches:");
-            
+
             // Simple case - handle empty folder mapping
             if (empty($folderMapping)) {
                 $this->output(message: "  (No folder mappings found)");
                 return;
             }
-            
+
             // Get all folder hierarchies
             $folderHierarchies = [];
             foreach ($folderMapping as $memberArn => $hierarchies) {
-                if (!is_array($hierarchies)) continue;
+                if (!is_array($hierarchies)) {
+                    continue;
+                }
                 foreach ($hierarchies as $hierarchy) {
-                    if (!is_string($hierarchy)) continue;
+                    if (!is_string($hierarchy)) {
+                        continue;
+                    }
                     if (!isset($folderHierarchies[$hierarchy])) {
                         $folderHierarchies[$hierarchy] = 0;
                     }
                     $folderHierarchies[$hierarchy]++;
                 }
             }
-            
+
             // Show sample of folder hierarchies
             $this->output(message: "  Found " . count($folderHierarchies) . " unique folder hierarchies");
             $i = 0;
             foreach ($folderHierarchies as $path => $count) {
-                if ($i++ >= 5) break;
+                if ($i++ >= 5) {
+                    break;
+                }
                 $this->output(message: "    '{$path}' ({$count} assets)");
             }
-            
+
             // Find all matches using the same logic as determineAssetTag
             $allMatches = [];
             foreach ($folderHierarchies as $hierarchy => $count) {
@@ -127,7 +135,7 @@ class AssetTaggingManager extends TaggingManager
                     if (!isset($groupConfig['aliases']) || !is_array($groupConfig['aliases'])) {
                         continue;
                     }
-                    
+
                     foreach ($groupConfig['aliases'] as $alias) {
                         if (stripos($hierarchy, $alias) !== false) {
                             if (!isset($allMatches[$groupKey])) {
@@ -147,23 +155,27 @@ class AssetTaggingManager extends TaggingManager
                     }
                 }
             }
-            
+
             // Output the matches
             if (empty($allMatches)) {
                 $this->output(message: "  (No group matches found in folders)");
                 return;
             }
-            
+
             foreach ($allMatches as $groupKey => $data) {
                 $this->output(message: "  $groupKey: {$data['count']} folder members");
                 // Show examples of matches (limit to 3 per group)
                 $shown = 0;
                 foreach ($data['matches'] as $match) {
-                    if ($shown++ >= 3) break;
-                    $this->output(message: "    '{$match['hierarchy']}' matched alias '{$match['alias']}' ({$match['count']} assets)");
+                    if ($shown++ >= 3) {
+                        break;
+                    }
+                    $this->output(
+                        message: "    '{$match['hierarchy']}' matched alias '{$match['alias']}'" .
+                        "({$match['count']} assets)"
+                    );
                 }
             }
-            
         } catch (\Exception $e) {
             $this->output(
                 message: "Error in outputFolderGroupMatches: " . $e->getMessage(),
@@ -257,14 +269,14 @@ class AssetTaggingManager extends TaggingManager
                 if ($nextToken) {
                     $params['NextToken'] = $nextToken;
                 }
-                
+
                 try {
                     $assetsResponse = QuickSightHelper::executeWithRetry(
                         $this->quickSight,
                         $apiMethod,
                         $params
                     );
-                    
+
                     if (!isset($assetsResponse[$resultKey]) || !is_array($assetsResponse[$resultKey])) {
                         $this->output(
                             message: "Warning: Missing or invalid result key '{$resultKey}' in API response",
@@ -272,10 +284,10 @@ class AssetTaggingManager extends TaggingManager
                         );
                         break;
                     }
-                    
+
                     foreach ($assetsResponse[$resultKey] as $asset) {
                         $assetCount++;
-                        
+
                         // Safely check for Arn
                         if (!isset($asset['Arn'])) {
                             $this->output(
@@ -284,33 +296,33 @@ class AssetTaggingManager extends TaggingManager
                             );
                             continue;
                         }
-                        
+
                         // Safely get folder hierarchies
-                        $folderHierarchies = isset($folders[$asset['Arn']]) && is_array($folders[$asset['Arn']]) 
-                            ? $folders[$asset['Arn']] 
+                        $folderHierarchies = isset($folders[$asset['Arn']]) && is_array($folders[$asset['Arn']])
+                            ? $folders[$asset['Arn']]
                             : [];
-                            
-                        $folderNamesDisplay = !empty($folderHierarchies) 
-                            ? implode(', ', $folderHierarchies) 
+
+                        $folderNamesDisplay = !empty($folderHierarchies)
+                            ? implode(', ', $folderHierarchies)
                             : 'None';
-                        
+
                         // Get tags
                         $tags = TaggingHelper::getResourceTags(
                             $this->quickSight,
                             $asset['Arn']
                         );
-                        
+
                         $groupTag = TaggingHelper::getGroupTag(
                             tags:   $tags,
                             tagKey: $this->tagKey
                         );
-                        
+
                         // Determine tag based on name and folders
                         $derivedTag = null;
                         if (isset($asset['Name'])) {
                             $derivedTag = $this->determineAssetTag($asset['Name'], $folderHierarchies);
                         }
-                        
+
                         // Process based on existing tag
                         if ($groupTag) {
                             if ($derivedTag && $derivedTag !== $groupTag) {
@@ -321,7 +333,7 @@ class AssetTaggingManager extends TaggingManager
                                 $this->output(message: "  Name: {$asset['Name']}");
                                 $this->output(message: "  Folders: {$folderNamesDisplay}");
                                 $this->output(message: "  Current Group: '{$groupTag}'");
-                                
+
                                 if (
                                     !$this->handleAssetTagging(
                                         asset:               $asset,
@@ -343,8 +355,8 @@ class AssetTaggingManager extends TaggingManager
                                 }
                             } else {
                                 $this->output(
-                                    message: "✓ {$assetTypeName} #{$assetCount} {$asset[$idField]} '{$asset['Name']}' " .
-                                             "[{$this->tagKey}: $groupTag]",
+                                    message: "✓ {$assetTypeName} #{$assetCount} {$asset[$idField]} " .
+                                    "'{$asset['Name']}' [{$this->tagKey}: $groupTag]",
                                     type:    'success'
                                 );
                             }
@@ -355,7 +367,7 @@ class AssetTaggingManager extends TaggingManager
                             );
                             $this->output(message: "  Name: {$asset['Name']}");
                             $this->output(message: "  Folders: {$folderNamesDisplay}");
-                            
+
                             if (
                                 !$this->handleAssetTagging(
                                     asset:               $asset,
@@ -377,9 +389,8 @@ class AssetTaggingManager extends TaggingManager
                             }
                         }
                     }
-                    
+
                     $nextToken = $assetsResponse['NextToken'] ?? null;
-                    
                 } catch (AwsException $e) {
                     $this->output(
                         message: "Error scanning {$assetType}: " . $e->getMessage(),
@@ -388,24 +399,23 @@ class AssetTaggingManager extends TaggingManager
                     break;
                 }
             } while ($nextToken);
-            
+
             $singularType = substr($assetType, 0, -1);
             $this->output(
                 message: ucfirst($singularType) . " scan complete. Processed $assetCount {$assetType}."
             );
-            
+
             return [
                 'total'    => $assetCount,
                 'tagged'   => $taggedCount,
                 'untagged' => $untaggedAssets,
             ];
-            
         } catch (\Exception $e) {
             $this->output(
                 message: "Critical error in scanAndTagAssets: " . $e->getMessage(),
                 type:    'error'
             );
-            
+
             return [
                 'total'    => $assetCount,
                 'tagged'   => $taggedCount,
@@ -417,7 +427,7 @@ class AssetTaggingManager extends TaggingManager
 /**
      * Determine tag for an asset based on name and folder hierarchies.
      * Modified to work with the 'aliases' field instead of 'match'.
-     * 
+     *
      * @param string $name Asset name
      * @param array $folderHierarchies Folder hierarchies
      * @return string|null Determined tag or null if no match
@@ -429,17 +439,17 @@ class AssetTaggingManager extends TaggingManager
             $bestFolderMatch = null;
             $bestFolderMatchLength = 0;
             $bestFolderMatchGroup = null;
-            
+
             $bestNameMatch = null;
             $bestNameMatchLength = 0;
             $bestNameMatchGroup = null;
-            
+
             // Find the best matches (most specific)
             foreach ($this->groups as $groupKey => $groupConfig) {
                 if (!isset($groupConfig['aliases']) || !is_array($groupConfig['aliases'])) {
                     continue;
                 }
-                
+
                 // Check folder matches
                 if (!empty($folderHierarchies)) {
                     foreach ($folderHierarchies as $hierarchy) {
@@ -455,7 +465,7 @@ class AssetTaggingManager extends TaggingManager
                         }
                     }
                 }
-                
+
                 // Check name matches
                 foreach ($groupConfig['aliases'] as $alias) {
                     if (stripos($name, $alias) !== false) {
@@ -468,17 +478,17 @@ class AssetTaggingManager extends TaggingManager
                     }
                 }
             }
-            
+
             // Prioritize folder matches over name matches
             if ($bestFolderMatchGroup !== null) {
                 return $bestFolderMatchGroup;
             }
-            
+
             // Fall back to name matches
             if ($bestNameMatchGroup !== null) {
                 return $bestNameMatchGroup;
             }
-            
+
             return null;
         } catch (\Exception $e) {
             $this->output(
@@ -517,7 +527,7 @@ class AssetTaggingManager extends TaggingManager
         try {
             if ($derivedTag) {
                 $this->output(message: "  Suggested Group: '{$derivedTag}'");
-                
+
                 // Explain matching source if possible
                 $matchSource = $this->explainTagMatch($asset['Name'], $folderHierarchies, $derivedTag);
                 if ($matchSource) {
@@ -525,8 +535,8 @@ class AssetTaggingManager extends TaggingManager
                 }
 
                 $applyTag = $autoApply || ($this->io
-                    ? $this->io->confirm("  Apply '{$derivedTag}'?", false)
-                    : (strtolower(trim(fgets(STDIN))) === 'y'));
+                ? $this->io->confirm("  Apply '{$derivedTag}'?", false)
+                : (strtolower(trim(fgets(STDIN))) === 'y'));
 
                 if ($applyTag) {
                     try {
@@ -605,7 +615,7 @@ class AssetTaggingManager extends TaggingManager
             if (!isset($this->groups[$derivedTag]['aliases']) || !is_array($this->groups[$derivedTag]['aliases'])) {
                 return null;
             }
-            
+
             // First check if it matched from a folder hierarchy
             if (!empty($folderHierarchies)) {
                 foreach ($folderHierarchies as $hierarchy) {
@@ -616,14 +626,14 @@ class AssetTaggingManager extends TaggingManager
                     }
                 }
             }
-            
+
             // Then check if it matched from the name
             foreach ($this->groups[$derivedTag]['aliases'] as $alias) {
                 if (stripos($name, $alias) !== false) {
                     return "(Matched from name with alias '{$alias}')";
                 }
             }
-            
+
             return null;
         } catch (\Exception $e) {
             $this->output(
@@ -647,14 +657,14 @@ class AssetTaggingManager extends TaggingManager
     ): bool {
         try {
             $manualTag = $this->io
-                ? $this->io->confirm("  Manually tag '{$asset['Name']}'?", false)
-                : (strtolower(trim(fgets(STDIN))) === 'y');
-                
+            ? $this->io->confirm("  Manually tag '{$asset['Name']}'?", false)
+            : (strtolower(trim(fgets(STDIN))) === 'y');
+
             if ($manualTag) {
                 $newTag = $this->io
-                    ? $this->io->ask("  Enter group tag")
-                    : trim(fgets(STDIN));
-                    
+                ? $this->io->ask("  Enter group tag")
+                : trim(fgets(STDIN));
+
                 if (!empty($newTag)) {
                     try {
                         if (
@@ -710,14 +720,14 @@ class AssetTaggingManager extends TaggingManager
     {
         $this->output(message: "Summary:");
         $this->output(message: "  Dashboards: {$stats['dashboards']['total']} total, " .
-            "{$stats['dashboards']['tagged']} tagged, " .
-            count($stats['dashboards']['untagged']) . " untagged");
+        "{$stats['dashboards']['tagged']} tagged, " .
+        count($stats['dashboards']['untagged']) . " untagged");
         $this->output(message: "  Datasets: {$stats['datasets']['total']} total, " .
-            "{$stats['datasets']['tagged']} tagged, " .
-            count($stats['datasets']['untagged']) . " untagged");
+        "{$stats['datasets']['tagged']} tagged, " .
+        count($stats['datasets']['untagged']) . " untagged");
         $this->output(message: "  Analyses: {$stats['analyses']['total']} total, " .
-            "{$stats['analyses']['tagged']} tagged, " .
-            count($stats['analyses']['untagged']) . " untagged");
+        "{$stats['analyses']['tagged']} tagged, " .
+        count($stats['analyses']['untagged']) . " untagged");
     }
 
     /**
@@ -731,17 +741,17 @@ class AssetTaggingManager extends TaggingManager
         $this->output(message: "Scanning QuickSight Users for tagging...");
 
         $stats = [
-            'total'   => 0,
-            'tagged'  => 0,
-            'skipped' => 0
+        'total'   => 0,
+        'tagged'  => 0,
+        'skipped' => 0
         ];
 
         $nextToken = null;
 
         do {
             $params = [
-                'AwsAccountId' => $this->awsAccountId,
-                'Namespace'    => 'default'
+            'AwsAccountId' => $this->awsAccountId,
+            'Namespace'    => 'default'
             ];
 
             if ($nextToken) {
@@ -776,12 +786,12 @@ class AssetTaggingManager extends TaggingManager
                     $derivedTag = $this->determineGroupFromEmail($email);
 
                     if ($existingTag) {
-                        $this->output(
-                            message: "✓ User $userName ($email) already tagged with '{$existingTag}'",
-                            type:    'success'
-                        );
-                        $stats['tagged']++;
-                        continue;
+                            $this->output(
+                                message: "✓ User $userName ($email) already tagged with '{$existingTag}'",
+                                type:    'success'
+                            );
+                            $stats['tagged']++;
+                            continue;
                     }
 
                     if ($derivedTag) {
@@ -818,13 +828,13 @@ class AssetTaggingManager extends TaggingManager
                         } else {
                             // If suggested tag was declined, offer manual tagging
                             $manualTag = $this->io
-                                ? $this->io->confirm("  Manually tag $userName?", false)
-                                : (strtolower(trim(fgets(STDIN))) === 'y');
+                            ? $this->io->confirm("  Manually tag $userName?", false)
+                            : (strtolower(trim(fgets(STDIN))) === 'y');
 
                             if ($manualTag) {
                                 $newTag = $this->io
-                                    ? $this->io->ask("  Enter group tag")
-                                    : trim(fgets(STDIN));
+                                ? $this->io->ask("  Enter group tag")
+                                : trim(fgets(STDIN));
 
                                 if (!empty($newTag)) {
                                     try {
@@ -863,13 +873,13 @@ class AssetTaggingManager extends TaggingManager
 
                         // No derived tag, offer manual tagging directly
                         $manualTag = $this->io
-                            ? $this->io->confirm("  Manually tag $userName?", false)
-                            : (strtolower(trim(fgets(STDIN))) === 'y');
+                        ? $this->io->confirm("  Manually tag $userName?", false)
+                        : (strtolower(trim(fgets(STDIN))) === 'y');
 
                         if ($manualTag) {
                             $newTag = $this->io
-                                ? $this->io->ask("  Enter group tag")
-                                : trim(fgets(STDIN));
+                            ? $this->io->ask("  Enter group tag")
+                            : trim(fgets(STDIN));
 
                             if (!empty($newTag)) {
                                 try {
@@ -914,7 +924,7 @@ class AssetTaggingManager extends TaggingManager
 
         $this->output(
             message: "User scan complete. Processed {$stats['total']} users, " .
-                    "tagged {$stats['tagged']}, skipped {$stats['skipped']}."
+                "tagged {$stats['tagged']}, skipped {$stats['skipped']}."
         );
 
         return $stats;

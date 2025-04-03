@@ -3,6 +3,7 @@
 namespace QSAssetManager\Command\Export;
 
 use QSAssetManager\Manager\Export\ExportManager;
+use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -10,22 +11,15 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 use Aws\QuickSight\QuickSightClient;
 
+#[AsCommand(
+    name: 'assets:export',
+    description: 'Export QuickSight dashboards and datasets'
+)]
 class ExportAssetsCommand extends Command
 {
-    protected static $defaultName = 'assets:export';
-
-    private $config;
-
-    public function __construct(array $config)
-    {
-        $this->config = $config;
-        parent::__construct();
-    }
-
     protected function configure()
     {
         $this
-            ->setDescription('Export QuickSight dashboards and datasets')
             ->setHelp('Export all or specific QuickSight assets')
             ->addOption(
                 'type',
@@ -47,24 +41,19 @@ class ExportAssetsCommand extends Command
         $io = new SymfonyStyle($input, $output);
         $io->title('QuickSight Asset Exporter');
 
-        // Load global configuration
-        $config       = $this->config;
-        $awsRegion    = $config['awsRegion']    ?? 'us-west-2';
+        $config = require PROJECT_ROOT . '/config/global.php';
+        $awsRegion = $config['awsRegion'] ?? 'us-west-2';
         $awsAccountId = $config['awsAccountId'] ?? '';
 
-        // Validate AWS account ID
         if (empty($awsAccountId)) {
-            $io->error('AWS Account ID is not configured');
-            return Command::FAILURE;
+            $awsAccountId = $io->ask('Enter AWS Account ID');
         }
 
-        // Create QuickSight client
         $qsClient = new QuickSightClient([
             'version' => '2018-04-01',
             'region'  => $awsRegion,
         ]);
 
-        // Create export manager
         $exportManager = new ExportManager(
             $config,
             $qsClient,
@@ -73,8 +62,7 @@ class ExportAssetsCommand extends Command
             $io
         );
 
-        // Determine export type
-        $type           = $input->getOption('type');
+        $type = $input->getOption('type');
         $performCleanup = $input->getOption('cleanup');
 
         try {
@@ -100,7 +88,7 @@ class ExportAssetsCommand extends Command
                 case 'all':
                 default:
                     $exportManager->exportAll(
-                        forceExport:    false,
+                        forceExport: false,
                         performCleanup: $performCleanup
                     );
                     break;
