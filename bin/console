@@ -5,36 +5,59 @@ require __DIR__ . '/../vendor/autoload.php';
 require __DIR__ . '/../bootstrap.php';
 
 use Symfony\Component\Console\Application;
+
+// Analysis commands
 use QSAssetManager\Command\Exploration\Analysis\RenameAnalysisCommand;
 use QSAssetManager\Command\Exploration\Analysis\RemoveBrokenAnalysisDataSetsCommand;
 use QSAssetManager\Command\Exploration\Analysis\DeployAnalysisCommand;
+
+// Dashboard commands
 use QSAssetManager\Command\Exploration\Dashboard\RenameDashboardCommand;
 use QSAssetManager\Command\Exploration\Dashboard\RemoveBrokenDashboardDataSetsCommand;
 use QSAssetManager\Command\Exploration\Dashboard\DeployDashboardCommand;
+
+// Dataset commands
+use QSAssetManager\Command\Dataset\DeployDatasetCommand;
+use QSAssetManager\Command\Dataset\RenameDatasetCommand;
+
+// Reporting and export commands
 use QSAssetManager\Command\Export\ExportAssetsCommand;
-use QSAssetManager\Command\User\DeleteInactiveUsersCommand;
-use QSAssetManager\Command\Tagging\ScanAssetsCommand;
 use QSAssetManager\Command\Reporting\ExportAssetReportCommand;
 use QSAssetManager\Command\Reporting\ExportDashboardViewCountsCommand;
 use QSAssetManager\Command\Reporting\ExportUserReportCommand;
+
+// Tagging and user management
+use QSAssetManager\Command\Tagging\ScanAssetsCommand;
+use QSAssetManager\Command\User\DeleteInactiveUsersCommand;
 
 // Load global configuration
 $config = require PROJECT_ROOT . '/config/global.php';
 
 $application = new Application('QSAssetManager', '1.0.0');
 
-// Register your commands
+// Register commands
+// Analysis
 $application->add(new RenameAnalysisCommand());
 $application->add(new RemoveBrokenAnalysisDataSetsCommand());
 $application->add(new DeployAnalysisCommand());
+
+// Dashboard
 $application->add(new RenameDashboardCommand());
 $application->add(new RemoveBrokenDashboardDataSetsCommand());
-$application->add(new ExportAssetsCommand());
 $application->add(new DeployDashboardCommand());
-$application->add(new ScanAssetsCommand());
+
+// Dataset
+$application->add(new DeployDatasetCommand());
+$application->add(new RenameDatasetCommand());
+
+// Reporting & Exports
+$application->add(new ExportAssetsCommand());
 $application->add(new ExportAssetReportCommand());
 $application->add(new ExportDashboardViewCountsCommand());
 $application->add(new ExportUserReportCommand());
+
+// Misc
+$application->add(new ScanAssetsCommand());
 $application->add(new DeleteInactiveUsersCommand());
 
 $application->run();

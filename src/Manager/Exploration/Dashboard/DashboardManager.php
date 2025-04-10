@@ -279,18 +279,44 @@ class DashboardManager extends ExplorationAssetManager
      * @param array $deploymentConfig
      * @return bool True on success, false otherwise.
      */
+    /**
+     * Deploy a dashboard from a combined deployment config.
+     *
+     * Supports either "template" (inline) or "TemplateFilePath" (external file).
+     *
+     * @param array $deploymentConfig
+     * @return bool True on success, false otherwise.
+     */
     public function deployDashboard(array $deploymentConfig): bool
     {
-        if (!isset($deploymentConfig['template'])) {
-            echo "Deployment config missing 'template' key.\n";
+        if (isset($deploymentConfig['TemplateFilePath'])) {
+            $path = $deploymentConfig['TemplateFilePath'];
+            if (!file_exists($path)) {
+                echo "❌ Template file not found: $path\n";
+                return false;
+            }
+
+            $json = file_get_contents($path);
+            $dashboard = json_decode($json, true);
+
+            if (!is_array($dashboard)) {
+                echo "❌ Failed to parse JSON from: $path\n";
+                return false;
+            }
+
+            if (isset($dashboard['Dashboard'])) {
+                $dashboard = $dashboard['Dashboard'];
+            }
+        } elseif (isset($deploymentConfig['template'])) {
+            $dashboard = $deploymentConfig['template'];
+        } else {
+            echo "❌ Deployment config missing 'template' or 'TemplateFilePath'.\n";
             return false;
         }
 
-        $dashboard = $deploymentConfig['template'];
-        $dashboard['Name'] = $deploymentConfig['Name'] . " (deployed)";
+        $dashboard['Name'] = $deploymentConfig['Name'];
         $newDashboardId = $deploymentConfig['DashboardId'] ?? QuickSightHelper::generateUuid();
 
-        // Handle DataSet Identifier Declarations
         if (isset($deploymentConfig['DataSetIdentifierDeclarations'])) {
             $originalDecls = $dashboard['Definition']['DataSetIdentifierDeclarations']
                 ?? $dashboard['DataSetIdentifierDeclarations']
@@ -305,7 +331,6 @@ class DashboardManager extends ExplorationAssetManager
             QuickSightHelper::updateAllDataSetIdentifiers($dashboard, $mapping);
         }
 
-        // Update dataset and perform string replacements
         QuickSightHelper::updateDataSetDeclarations($dashboard, $deploymentConfig['DestinationAwsAccountId']);
 
         if (!empty($deploymentConfig['StringReplacements'])) {
@@ -314,31 +339,43 @@ class DashboardManager extends ExplorationAssetManager
 
         $dashboardParams = [
             'AwsAccountId' => $deploymentConfig['DestinationAwsAccountId'],
-            'DashboardId' => $newDashboardId,
-            'Name' => $dashboard['Name'],
-            'Definition' => $dashboard['Definition'] ?? $dashboard,
+            'DashboardId'  => $newDashboardId,
+            'Name'         => $dashboard['Name'],
+            'Definition'   => $dashboard['Definition'] ?? $dashboard,
         ];
 
         try {
-            // Try to describe dashboard, update if exists
             $this->quickSight->describeDashboard([
                 'AwsAccountId' => $deploymentConfig['DestinationAwsAccountId'],
-                'DashboardId' => $newDashboardId,
+                'DashboardId'  => $newDashboardId,
             ]);
 
             $response = $this->quickSight->updateDashboard($dashboardParams);
-            echo "Dashboard updated successfully with ID: $newDashboardId\n";
+            echo "📘 Dashboard updated: $newDashboardId\n";
         } catch (AwsException $e) {
             if ($e->getAwsErrorCode() === 'ResourceNotFoundException') {
                 $response = $this->quickSight->createDashboard($dashboardParams);
-                echo "Dashboard created successfully with ID: $newDashboardId\n";
+                echo "📗 Dashboard created: $newDashboardId\n";
+
+                $versionNumber = QuickSightHelper::extractVersionNumber($response);
+                $statusResult = QuickSightHelper::waitForDashboardUpdateSuccess(
+                    $this->quickSight,
+                    $deploymentConfig['DestinationAwsAccountId'],
+                    $newDashboardId,
+                    $versionNumber
+                );
+
+                if (!$statusResult['success']) {
+                    echo "❌ Dashboard creation failed due to errors:\n";
+                    QuickSightHelper::printDashboardCreationErrors($statusResult['errors']);
+                    return false;
+                }
             } else {
-                echo "Dashboard error: " . $e->getMessage() . "\n";
+                echo "❌ Dashboard deployment error: " . $e->getMessage() . "\n";
                 return false;
             }
         }
 
-        // Manage dashboard version and permissions
         $this->manageDashboardVersion($response, $deploymentConfig, $newDashboardId);
         $this->manageDashboardPermissions($deploymentConfig, $newDashboardId);
         $this->tagDashboard($deploymentConfig, $newDashboardId);
