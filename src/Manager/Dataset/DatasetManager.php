@@ -214,7 +214,7 @@ class DatasetManager extends AssetManager
                         'ScheduleId'        => $scheduleId,
                         'RefreshType'       => $schedule['RefreshType'],
                         'ScheduleFrequency' => $schedule['ScheduleFrequency'],
-                        'StartAfterDateTime'=> $schedule['StartAfterDateTime'],
+                        'StartAfterDateTime' => $schedule['StartAfterDateTime'],
                     ],
                 ]);
                 echo "🕒 Refresh schedule created: $scheduleId\n";

@@ -938,14 +938,14 @@ class ExportManager
         // Use the current directory (which should be the asset type directory)
         $currentDir = $file->getPath();
         $archiveDir = $currentDir . DIRECTORY_SEPARATOR . 'archived';
-    
+
         // Create archive directory if it doesn't exist
         if (!is_dir($archiveDir)) {
             mkdir($archiveDir, 0777, true);
         }
-    
+
         $archivePath = $archiveDir . DIRECTORY_SEPARATOR . $file->getFilename();
-    
+
         try {
             if (rename($file->getPathname(), $archivePath)) {
                 $this->outputMessage("Archived: {$file->getPathname()} → $archivePath", 'success');
