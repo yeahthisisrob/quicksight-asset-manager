@@ -34,16 +34,13 @@ class AssetReportingManager
         string $awsRegion,
         ?SymfonyStyle $io = null
     ) {
-        $this->config = $config;
-        $this->quickSight = $quickSight;
+        $this->config       = $config;
+        $this->quickSight   = $quickSight;
         $this->awsAccountId = $awsAccountId;
-        $this->awsRegion = $awsRegion;
-        $this->io = $io;
+        $this->awsRegion    = $awsRegion;
+        $this->io           = $io;
     }
 
-    /**
-     * Export a CSV report of QuickSight assets.
-     */
     public function exportAssetReport(
         ?string $outputPath = null,
         bool $onlyUntagged = false,
@@ -52,18 +49,17 @@ class AssetReportingManager
         string $assetType = 'all'
     ): bool|string {
         $this->write("Starting asset report export...");
-        $timestamp = date('Ymd_His');
-        $defaultDir = $this->config['paths']['report_export_path']
-            ?? (getcwd() . '/exports');
-        $exportDir = rtrim($outputPath ?? $defaultDir, DIRECTORY_SEPARATOR);
+        $timestamp   = date('Ymd_His');
+        $defaultPath = $this->config['paths']['report_export_path'] ?? (getcwd() . '/exports');
+        $exportDir   = rtrim($outputPath ?? $defaultPath, DIRECTORY_SEPARATOR);
 
         if (!is_dir($exportDir)) {
             mkdir($exportDir, 0777, true);
             $this->write("Created export directory: $exportDir");
         }
 
-        $filename = "$exportDir/quicksight_assets_report_{$timestamp}.csv";
-        $fh = fopen($filename, 'w');
+        $filename = "{$exportDir}/quicksight_assets_report_{$timestamp}.csv";
+        $fh       = fopen($filename, 'w');
         if (!$fh) {
             $this->write("Error: Unable to create output file", 'error');
             return false;
@@ -77,19 +73,17 @@ class AssetReportingManager
         $this->buildUsageMaps();
         $this->write("Collected usage maps");
 
-        // Header row with new UsedByDataSets column
-        fputcsv($fh, [
-            'Asset Type',
-            'ID',
-            'Name',
-            'Shared Folders',
-            'Owners',
-            'Group',
-            'Other Tags',
-            'UsedByDashboards',
-            'UsedByAnalyses',
-            'UsedByDataSets',
-        ], ',', '"', '\\');
+        // CSV header
+        fputcsv(
+            stream:    $fh,
+            fields:    [
+                'Asset Type', 'ID', 'Name', 'Shared Folders', 'Owners', 'Group', 'Other Tags',
+                'UsedByDashboards', 'UsedByAnalyses', 'UsedByDataSets'
+            ],
+            separator: ',',
+            enclosure: '"',
+            escape:    '\\'
+        );
 
         if ($assetType === 'all' || $assetType === 'dashboards') {
             $this->exportDashboardsToCSV($fh, $folders, $onlyUntagged, $onlyNoFolders, $tagFilter);
@@ -108,146 +102,142 @@ class AssetReportingManager
 
     protected function buildUsageMaps(): void
     {
-        // Describe dashboards → datasetDashboardMap & analysisDashboardMap
-        $dashboards = [];
-        $token = null;
-        do {
-            $params = ['AwsAccountId' => $this->awsAccountId];
-            if ($token) {
-                $params['NextToken'] = $token;
-            }
-            try {
-                $resp = QuickSightHelper::executeWithRetry($this->quickSight, 'listDashboards', $params);
-                $dashboards = array_merge($dashboards, $resp['DashboardSummaryList'] ?? []);
-                $token = $resp['NextToken'] ?? null;
-            } catch (AwsException $e) {
-                $this->write("Error listing dashboards: " . $e->getMessage(), 'error');
-                break;
-            }
-        } while ($token);
+        // ── 1) dashboards → datasetDashboardMap & analysisDashboardMap ──
 
+        $dashboards = QuickSightHelper::paginate(
+            client:       $this->quickSight,
+            awsAccountId: $this->awsAccountId,
+            operation:    'listDashboards',
+            listKey:      'DashboardSummaryList'
+        );
         $total = count($dashboards);
-        $processed = 0;
+        $this->write("Describing {$total} dashboards…");
+
         foreach (array_chunk($dashboards, $this->maxConcurrent) as $batch) {
             $promises = [];
-            foreach ($batch as $dash) {
-                $id = $dash['DashboardId'];
-                $promises[$id] = $this->quickSight->describeDashboardAsync([
-                    'AwsAccountId' => $this->awsAccountId,
-                    'DashboardId' => $id,
-                ]);
+            foreach ($batch as $d) {
+                $id     = $d['DashboardId'];
+                $params = ['AwsAccountId' => $this->awsAccountId, 'DashboardId' => $id];
+
+                $promises[$id] = $this->quickSight
+                    ->describeDashboardAsync($params)
+                    ->otherwise(function ($reason) use ($params) {
+                        return QuickSightHelper::executeWithRetry(
+                            $this->quickSight,
+                            'describeDashboard',
+                            $params
+                        );
+                    });
             }
+
             $results = Promise\Utils::settle($promises)->wait();
             foreach ($results as $id => $res) {
-                $processed++;
-                if ($processed % 10 === 0 || $processed === $total) {
-                    $this->write("Described $processed/$total dashboards");
-                }
                 if ($res['state'] !== 'fulfilled') {
+                    $this->write("Failed to describe dashboard {$id}: " . $res['reason'], 'error');
                     continue;
                 }
                 $desc = $res['value'];
-                $version = $desc['Dashboard']['Version'] ?? [];
-                foreach ($version['DataSetArns'] ?? [] as $arn) {
-                    $ds = basename($arn);
-                    $this->datasetDashboardMap[$ds][] = $id;
+                $ver  = $desc['Dashboard']['Version'] ?? [];
+
+                foreach ($ver['DataSetArns'] ?? [] as $arn) {
+                    $this->datasetDashboardMap[basename($arn)][] = $id;
                 }
-                $src = $version['SourceEntityArn'] ?? '';
-                if (strpos($src, ':analysis/') !== false) {
-                    $aid = substr(strrchr($src, '/'), 1);
+                if (!empty($ver['SourceEntityArn']) && strpos($ver['SourceEntityArn'], ':analysis/') !== false) {
+                    $aid = substr(strrchr($ver['SourceEntityArn'], '/'), 1);
                     $this->analysisDashboardMap[$aid][] = $id;
                 }
             }
         }
 
-        // Describe analyses → datasetAnalysisMap
-        $analysisList = [];
-        $token = null;
-        do {
-            $params = ['AwsAccountId' => $this->awsAccountId];
-            if ($token) {
-                $params['NextToken'] = $token;
-            }
-            try {
-                $resp = QuickSightHelper::executeWithRetry($this->quickSight, 'listAnalyses', $params);
-                $analysisList = array_merge($analysisList, $resp['AnalysisSummaryList'] ?? []);
-                $token = $resp['NextToken'] ?? null;
-            } catch (AwsException $e) {
-                $this->write("Error listing analyses: " . $e->getMessage(), 'error');
-                break;
-            }
-        } while ($token);
+        // ── 2) analyses → datasetAnalysisMap ──
 
-        $total = count($analysisList);
-        $processed = 0;
-        foreach (array_chunk($analysisList, $this->maxConcurrent) as $batch) {
+        $analyses = QuickSightHelper::paginate(
+            client:       $this->quickSight,
+            awsAccountId: $this->awsAccountId,
+            operation:    'listAnalyses',
+            listKey:      'AnalysisSummaryList'
+        );
+        $total = count($analyses);
+        $this->write("Describing {$total} analyses…");
+
+        foreach (array_chunk($analyses, $this->maxConcurrent) as $batch) {
             $promises = [];
-            foreach ($batch as $an) {
-                $id = $an['AnalysisId'];
-                $promises[$id] = $this->quickSight->describeAnalysisAsync([
-                    'AwsAccountId' => $this->awsAccountId,
-                    'AnalysisId' => $id,
-                ]);
+            foreach ($batch as $a) {
+                $id     = $a['AnalysisId'];
+                $params = ['AwsAccountId' => $this->awsAccountId, 'AnalysisId' => $id];
+
+                $promises[$id] = $this->quickSight
+                    ->describeAnalysisAsync($params)
+                    ->otherwise(function ($reason) use ($params) {
+                        return QuickSightHelper::executeWithRetry(
+                            $this->quickSight,
+                            'describeAnalysis',
+                            $params
+                        );
+                    });
             }
+
             $results = Promise\Utils::settle($promises)->wait();
             foreach ($results as $id => $res) {
-                $processed++;
-                if ($processed % 10 === 0 || $processed === $total) {
-                    $this->write("Described $processed/$total analyses");
-                }
                 if ($res['state'] !== 'fulfilled') {
+                    $this->write("Failed to describe analysis {$id}: " . $res['reason'], 'error');
                     continue;
                 }
                 $desc = $res['value'];
                 foreach ($desc['Analysis']['DataSetArns'] ?? [] as $arn) {
-                    $ds = basename($arn);
-                    $this->datasetAnalysisMap[$ds][] = $id;
+                    $this->datasetAnalysisMap[basename($arn)][] = $id;
                 }
             }
         }
 
-        // Describe datasets → datasetDependencyMap
-        $dataSets = [];
-        $token = null;
-        do {
-            $params = ['AwsAccountId' => $this->awsAccountId];
-            if ($token) {
-                $params['NextToken'] = $token;
-            }
-            try {
-                $resp = QuickSightHelper::executeWithRetry($this->quickSight, 'listDataSets', $params);
-                $dataSets = array_merge($dataSets, $resp['DataSetSummaries'] ?? []);
-                $token = $resp['NextToken'] ?? null;
-            } catch (AwsException $e) {
-                $this->write("Error listing datasets: " . $e->getMessage(), 'error');
-                break;
-            }
-        } while ($token);
+        // ── 3) datasets → datasetDependencyMap ──
 
-        $total = count($dataSets);
-        $processed = 0;
-        foreach (array_chunk($dataSets, $this->maxConcurrent) as $batch) {
+        $datasets = QuickSightHelper::paginate(
+            client:       $this->quickSight,
+            awsAccountId: $this->awsAccountId,
+            operation:    'listDataSets',
+            listKey:      'DataSetSummaries'
+        );
+        $total = count($datasets);
+        $this->write("Describing {$total} datasets…");
+
+        foreach (array_chunk($datasets, $this->maxConcurrent) as $batch) {
             $promises = [];
             foreach ($batch as $ds) {
-                $id = $ds['DataSetId'];
-                $promises[$id] = $this->quickSight->describeDataSetAsync([
-                    'AwsAccountId' => $this->awsAccountId,
-                    'DataSetId' => $id,
-                ]);
+                $id     = $ds['DataSetId'];
+                $params = ['AwsAccountId' => $this->awsAccountId, 'DataSetId' => $id];
+
+                $promises[$id] = $this->quickSight
+                    ->describeDataSetAsync($params)
+                    ->otherwise(function ($reason) use ($params, $id) {
+                        if ($reason instanceof AwsException
+                            && $reason->getAwsErrorCode() === 'InvalidParameterValueException'
+                        ) {
+                            echo "Skipping unsupported dataset {$id}: " . $reason->getMessage() . "\n";
+                            return null;
+                        }
+                        return QuickSightHelper::executeWithRetry(
+                            $this->quickSight,
+                            'describeDataSet',
+                            $params
+                        );
+                    });
             }
+
             $results = Promise\Utils::settle($promises)->wait();
             foreach ($results as $id => $res) {
-                $processed++;
-                if ($processed % 10 === 0 || $processed === $total) {
-                    $this->write("Described $processed/$total datasets");
-                }
                 if ($res['state'] !== 'fulfilled') {
+                    $this->write("Failed to describe dataset {$id}: " . $res['reason'], 'error');
                     continue;
                 }
-                $desc = $res['value'];
-                // Look for any DataSetArn sources in LogicalTableMap
-                foreach ($desc['DataSet']['LogicalTableMap'] ?? [] as $logical) {
-                    $src = $logical['Value']['Source'] ?? [];
+                $value = $res['value'];
+                if ($value === null || !isset($value['DataSet'])) {
+                    // skipped flat-file or unsupported dataset
+                    continue;
+                }
+                $def = $value['DataSet'];
+                foreach ($def['LogicalTableMap'] ?? [] as $lt) {
+                    $src = $lt['Value']['Source'] ?? [];
                     if (!empty($src['DataSetArn'])) {
                         $parent = basename($src['DataSetArn']);
                         $this->datasetDependencyMap[$parent][] = $id;
@@ -262,15 +252,15 @@ class AssetReportingManager
         $map = [];
         try {
             $resp = QuickSightHelper::executeWithRetry(
-                $this->quickSight,
-                'listFolders',
-                ['AwsAccountId' => $this->awsAccountId]
+                client: $this->quickSight,
+                method: 'listFolders',
+                params: ['AwsAccountId' => $this->awsAccountId]
             );
             foreach ($resp['FolderSummaryList'] ?? [] as $f) {
                 $members = QuickSightHelper::executeWithRetry(
-                    $this->quickSight,
-                    'listFolderMembers',
-                    ['AwsAccountId' => $this->awsAccountId, 'FolderId' => $f['FolderId']]
+                    client: $this->quickSight,
+                    method: 'listFolderMembers',
+                    params: ['AwsAccountId' => $this->awsAccountId, 'FolderId' => $f['FolderId']]
                 )['FolderMemberList'] ?? [];
                 foreach ($members as $m) {
                     $map[$m['MemberArn']][] = $f['Name'];
@@ -289,16 +279,17 @@ class AssetReportingManager
         bool $onlyNoFolders,
         ?string $tagFilter
     ): void {
-        $cnt = 0;
+        $count = 0;
         $token = null;
         do {
-            $resp = QuickSightHelper::executeWithRetry($this->quickSight, 'listDashboards', [
-                'AwsAccountId' => $this->awsAccountId,
-                'NextToken' => $token,
-            ]);
+            $resp = QuickSightHelper::executeWithRetry(
+                client: $this->quickSight,
+                method: 'listDashboards',
+                params: ['AwsAccountId' => $this->awsAccountId, 'NextToken' => $token]
+            );
             foreach ($resp['DashboardSummaryList'] ?? [] as $d) {
-                $cnt++;
-                $tags = TaggingHelper::getResourceTags($this->quickSight, $d['Arn']);
+                $count++;
+                $tags  = TaggingHelper::getResourceTags($this->quickSight, $d['Arn']);
                 $group = TaggingHelper::getGroupTag(tags: $tags, tagKey: $this->config['tagging']['default_key'] ?? 'group');
                 if (($onlyUntagged && $group) || ($tagFilter && $group !== $tagFilter)) {
                     continue;
@@ -308,28 +299,23 @@ class AssetReportingManager
                     continue;
                 }
                 $owners = $this->getDashboardOwners($d['DashboardId']);
-                $other = [];
+                $other  = [];
                 foreach ($tags as $t) {
                     if (strtolower($t['Key']) !== strtolower($this->config['tagging']['default_key'] ?? 'group')) {
                         $other[] = "{$t['Key']}={$t['Value']}";
                     }
                 }
-                fputcsv($fh, [
-                    'Dashboard',
-                    $d['DashboardId'],
-                    $d['Name'],
-                    implode('|', $sf),
-                    implode('|', $owners),
-                    $group ?? 'Untagged',
-                    implode('; ', $other),
-                    '',
-                    '',
-                    '', // no analyses/datasets columns here
-                ], ',', '"', '\\');
+                fputcsv(
+                    stream: $fh,
+                    fields: ['Dashboard', $d['DashboardId'], $d['Name'], implode('|', $sf), implode('|', $owners), $group ?? 'Untagged', implode('; ', $other), '', '', ''],
+                    separator: ',',
+                    enclosure: '"',
+                    escape: '\\'
+                );
             }
             $token = $resp['NextToken'] ?? null;
         } while ($token);
-        $this->write("Processed $cnt dashboards");
+        $this->write("Processed $count dashboards");
     }
 
     protected function exportDatasetsToCSV(
@@ -339,16 +325,17 @@ class AssetReportingManager
         bool $onlyNoFolders,
         ?string $tagFilter
     ): void {
-        $cnt = 0;
+        $count = 0;
         $token = null;
         do {
-            $resp = QuickSightHelper::executeWithRetry($this->quickSight, 'listDataSets', [
-                'AwsAccountId' => $this->awsAccountId,
-                'NextToken' => $token,
-            ]);
+            $resp = QuickSightHelper::executeWithRetry(
+                client: $this->quickSight,
+                method: 'listDataSets',
+                params: ['AwsAccountId' => $this->awsAccountId, 'NextToken' => $token]
+            );
             foreach ($resp['DataSetSummaries'] ?? [] as $ds) {
-                $cnt++;
-                $tags = TaggingHelper::getResourceTags($this->quickSight, $ds['Arn']);
+                $count++;
+                $tags  = TaggingHelper::getResourceTags($this->quickSight, $ds['Arn']);
                 $group = TaggingHelper::getGroupTag(tags: $tags, tagKey: $this->config['tagging']['default_key'] ?? 'group');
                 if (($onlyUntagged && $group) || ($tagFilter && $group !== $tagFilter)) {
                     continue;
@@ -357,32 +344,28 @@ class AssetReportingManager
                 if ($onlyNoFolders && !empty($sf)) {
                     continue;
                 }
-                $owners = $this->getDatasetOwners($ds['DataSetId']);
-                $other = [];
+                $owners  = $this->getDatasetOwners($ds['DataSetId']);
+                $other   = [];
                 foreach ($tags as $t) {
                     if (strtolower($t['Key']) !== strtolower($this->config['tagging']['default_key'] ?? 'group')) {
                         $other[] = "{$t['Key']}={$t['Value']}";
                     }
                 }
                 $dashList = $this->datasetDashboardMap[$ds['DataSetId']] ?? [];
-                $anaList = $this->datasetAnalysisMap[$ds['DataSetId']] ?? [];
-                $depList = $this->datasetDependencyMap[$ds['DataSetId']] ?? [];
-                fputcsv($fh, [
-                    'Dataset',
-                    $ds['DataSetId'],
-                    $ds['Name'],
-                    implode('|', $sf),
-                    implode('|', $owners),
-                    $group ?? 'Untagged',
-                    implode('; ', $other),
-                    implode('|', $dashList),
-                    implode('|', $anaList),
-                    implode('|', $depList),
-                ], ',', '"', '\\');
+                $anaList  = $this->datasetAnalysisMap[$ds['DataSetId']]  ?? [];
+                $depList  = $this->datasetDependencyMap[$ds['DataSetId']] ?? [];
+
+                fputcsv(
+                    stream: $fh,
+                    fields: ['Dataset', $ds['DataSetId'], $ds['Name'], implode('|', $sf), implode('|', $owners), $group ?? 'Untagged', implode('; ', $other), implode('|', $dashList), implode('|', $anaList), implode('|', $depList)],
+                    separator: ',',
+                    enclosure: '"',
+                    escape: '\\'
+                );
             }
             $token = $resp['NextToken'] ?? null;
         } while ($token);
-        $this->write("Processed $cnt datasets");
+        $this->write("Processed $count datasets");
     }
 
     protected function exportAnalysesToCSV(
@@ -392,16 +375,17 @@ class AssetReportingManager
         bool $onlyNoFolders,
         ?string $tagFilter
     ): void {
-        $cnt = 0;
+        $count = 0;
         $token = null;
         do {
-            $resp = QuickSightHelper::executeWithRetry($this->quickSight, 'listAnalyses', [
-                'AwsAccountId' => $this->awsAccountId,
-                'NextToken' => $token,
-            ]);
+            $resp = QuickSightHelper::executeWithRetry(
+                client: $this->quickSight,
+                method: 'listAnalyses',
+                params: ['AwsAccountId' => $this->awsAccountId, 'NextToken' => $token]
+            );
             foreach ($resp['AnalysisSummaryList'] ?? [] as $an) {
-                $cnt++;
-                $tags = TaggingHelper::getResourceTags($this->quickSight, $an['Arn']);
+                $count++;
+                $tags  = TaggingHelper::getResourceTags($this->quickSight, $an['Arn']);
                 $group = TaggingHelper::getGroupTag(tags: $tags, tagKey: $this->config['tagging']['default_key'] ?? 'group');
                 if (($onlyUntagged && $group) || ($tagFilter && $group !== $tagFilter)) {
                     continue;
@@ -410,30 +394,26 @@ class AssetReportingManager
                 if ($onlyNoFolders && !empty($sf)) {
                     continue;
                 }
-                $owners = $this->getAnalysisOwners($an['AnalysisId']);
-                $other = [];
+                $owners  = $this->getAnalysisOwners($an['AnalysisId']);
+                $other   = [];
                 foreach ($tags as $t) {
                     if (strtolower($t['Key']) !== strtolower($this->config['tagging']['default_key'] ?? 'group')) {
                         $other[] = "{$t['Key']}={$t['Value']}";
                     }
                 }
                 $dashList = $this->analysisDashboardMap[$an['AnalysisId']] ?? [];
-                fputcsv($fh, [
-                    'Analysis',
-                    $an['AnalysisId'],
-                    $an['Name'],
-                    implode('|', $sf),
-                    implode('|', $owners),
-                    $group ?? 'Untagged',
-                    implode('; ', $other),
-                    implode('|', $dashList),
-                    '', // no analyses list for analyses
-                    '', // no dependent datasets here
-                ], ',', '"', '\\');
+
+                fputcsv(
+                    stream: $fh,
+                    fields: ['Analysis', $an['AnalysisId'], $an['Name'], implode('|', $sf), implode('|', $owners), $group ?? 'Untagged', implode('; ', $other), implode('|', $dashList), '', ''],
+                    separator: ',',
+                    enclosure: '"',
+                    escape: '\\'
+                );
             }
             $token = $resp['NextToken'] ?? null;
         } while ($token);
-        $this->write("Processed $cnt analyses");
+        $this->write("Processed $count analyses");
     }
 
     protected function getDashboardOwners(string $dashboardId): array
@@ -441,7 +421,7 @@ class AssetReportingManager
         try {
             $resp = QuickSightHelper::executeWithRetry($this->quickSight, 'describeDashboardPermissions', [
                 'AwsAccountId' => $this->awsAccountId,
-                'DashboardId' => $dashboardId,
+                'DashboardId'  => $dashboardId,
             ]);
             return array_column($resp['Permissions'] ?? [], 'Principal');
         } catch (AwsException $e) {
@@ -454,7 +434,7 @@ class AssetReportingManager
         try {
             $resp = QuickSightHelper::executeWithRetry($this->quickSight, 'describeDataSetPermissions', [
                 'AwsAccountId' => $this->awsAccountId,
-                'DataSetId' => $datasetId,
+                'DataSetId'    => $datasetId,
             ]);
             return array_column($resp['Permissions'] ?? [], 'Principal');
         } catch (AwsException $e) {
@@ -467,7 +447,7 @@ class AssetReportingManager
         try {
             $resp = QuickSightHelper::executeWithRetry($this->quickSight, 'describeAnalysisPermissions', [
                 'AwsAccountId' => $this->awsAccountId,
-                'AnalysisId' => $analysisId,
+                'AnalysisId'   => $analysisId,
             ]);
             return array_column($resp['Permissions'] ?? [], 'Principal');
         } catch (AwsException $e) {
