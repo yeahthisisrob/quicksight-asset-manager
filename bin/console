@@ -30,6 +30,9 @@ use QSAssetManager\Command\Reporting\ExportUserReportCommand;
 use QSAssetManager\Command\Tagging\ScanAssetsCommand;
 use QSAssetManager\Command\User\DeleteInactiveUsersCommand;
 
+// ** Permissions commands **
+use QSAssetManager\Command\Permissions\AddPrincipalPermissionsCommand;
+
 // Load global configuration
 $config = require PROJECT_ROOT . '/config/global.php';
 
@@ -59,5 +62,8 @@ $application->add(new ExportUserReportCommand());
 // Misc
 $application->add(new ScanAssetsCommand());
 $application->add(new DeleteInactiveUsersCommand());
+
+// Permissions
+$application->add(new AddPrincipalPermissionsCommand());
 
 $application->run();

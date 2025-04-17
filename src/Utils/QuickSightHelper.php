@@ -633,4 +633,35 @@ class QuickSightHelper
         }
         return $assetMap;
     }
+
+    /**
+     * Paginates through any QuickSight list operation.
+     *
+     * @param QuickSightClient $client
+     * @param string           $awsAccountId
+     * @param string           $operation   e.g. 'listDashboards'
+     * @param string           $listKey     e.g. 'DashboardSummaryList'
+     * @return array
+     */
+    public static function paginate(
+        QuickSightClient $client,
+        string $awsAccountId,
+        string $operation,
+        string $listKey
+    ): array {
+        $results = [];
+        $token   = null;
+
+        do {
+            $params = ['AwsAccountId' => $awsAccountId];
+            if ($token) {
+                $params['NextToken'] = $token;
+            }
+            $resp    = self::executeWithRetry($client, $operation, $params);
+            $results = array_merge($results, $resp[$listKey] ?? []);
+            $token   = $resp['NextToken'] ?? null;
+        } while ($token);
+
+        return $results;
+    }
 }
