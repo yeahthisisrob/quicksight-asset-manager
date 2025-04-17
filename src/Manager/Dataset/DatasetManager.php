@@ -34,8 +34,8 @@ class DatasetManager extends AssetManager
                 'Name'             => $name ?: $definition['Name'] ?? 'Updated Dataset',
                 'PhysicalTableMap' => $definition['PhysicalTableMap'],
                 'LogicalTableMap'  => $definition['LogicalTableMap'] ?? [],
-                'OutputColumns'    => $definition['OutputColumns'] ?? [],
-                'ImportMode'       => $definition['ImportMode'] ?? 'SPICE',
+                'OutputColumns'    => $definition['OutputColumns']    ?? [],
+                'ImportMode'       => $definition['ImportMode']       ?? 'SPICE',
             ];
 
             $this->quickSight->updateDataSet($params);
@@ -54,7 +54,6 @@ class DatasetManager extends AssetManager
                 'AwsAccountId' => $this->awsAccountId,
                 'DataSetId'    => $datasetId,
             ]);
-
             return $response['Name'] ?? 'Updated Dataset';
         } catch (AwsException $e) {
             echo "⚠ Warning: Could not retrieve dataset name: " . $e->getMessage() . "\n";
@@ -75,72 +74,156 @@ class DatasetManager extends AssetManager
         }
 
         echo "Renaming dataset '{$definition['Name']}' → '{$newName}'\n";
-
         return $this->updateAsset($datasetId, $definition, $newName);
     }
 
     public function deployDataset(array $config): bool
     {
-        // Load template from file if TemplateFilePath is specified
+        // Load template from file if provided
         if (!isset($config['template']) && isset($config['TemplateFilePath'])) {
             $templatePath = $config['TemplateFilePath'];
             if (!file_exists($templatePath)) {
-                echo "❌ Template file not found at $templatePath\n";
+                echo "❌ Template file not found: $templatePath\n";
                 return false;
             }
-
-            $templateContent = file_get_contents($templatePath);
-            if (!$templateContent) {
-                echo "❌ Failed to read template file content.\n";
+            $content = file_get_contents($templatePath);
+            if ($content === false) {
+                echo "❌ Failed to read template: $templatePath\n";
                 return false;
             }
-
-            $parsed = json_decode($templateContent, true);
+            $parsed = json_decode($content, true);
             if (!is_array($parsed)) {
-                echo "❌ Invalid JSON in template file: $templatePath\n";
+                echo "❌ Invalid JSON in template: $templatePath\n";
                 return false;
             }
-
-            // Accept top-level key "DataSet" (as returned by describeDataSet) or raw template
             $config['template'] = $parsed['DataSet'] ?? $parsed;
         }
 
         if (!isset($config['template'])) {
-            echo "❌ Deployment config missing 'template' key and no TemplateFilePath provided.\n";
+            echo "❌ No template provided in config.\n";
             return false;
         }
 
-        $dataset = $config['template'];
-        $dataset['Name'] = $config['Name'];
-        $newDatasetId = $config['DataSetId'] ?? QuickSightHelper::generateUuid();
+        $dataset       = $config['template'];
+        $dataset['Name']   = $config['Name'];
+        $newDatasetId  = $config['DataSetId'] ?? QuickSightHelper::generateUuid();
 
+        // capture original definition if updating
+        $isUpdate = false;
+        $originalDefinition = null;
+        try {
+            $orig = $this->quickSight->describeDataSet([
+                'AwsAccountId' => $config['DestinationAwsAccountId'],
+                'DataSetId'    => $newDatasetId,
+            ]);
+            $isUpdate = true;
+            $originalDefinition = $orig->toArray()['DataSet'] ?? null;
+        } catch (AwsException $e) {
+            if ($e->getAwsErrorCode() !== 'ResourceNotFoundException') {
+                echo "❌ Error describing existing dataset: " . $e->getMessage() . "\n";
+                return false;
+            }
+        }
+
+        // Override DataSourceArn if provided
+        if (!empty($config['DataSourceArn']) && isset($dataset['PhysicalTableMap'])) {
+            foreach ($dataset['PhysicalTableMap'] as $key => $table) {
+                if (isset($table['RelationalTable'])) {
+                    $dataset['PhysicalTableMap'][$key]['RelationalTable']['DataSourceArn']
+                        = $config['DataSourceArn'];
+                }
+                if (isset($table['CustomSql'])) {
+                    $dataset['PhysicalTableMap'][$key]['CustomSql']['DataSourceArn']
+                        = $config['DataSourceArn'];
+                }
+            }
+            echo "🔄 Overrode PhysicalTableMap to use DataSource {$config['DataSourceArn']}\n";
+        }
+
+        // build params
         $params = [
             'AwsAccountId'     => $config['DestinationAwsAccountId'],
             'DataSetId'        => $newDatasetId,
             'Name'             => $dataset['Name'],
             'PhysicalTableMap' => $dataset['PhysicalTableMap'],
             'LogicalTableMap'  => $dataset['LogicalTableMap'] ?? [],
-            'OutputColumns'    => $dataset['OutputColumns'] ?? [],
-            'ImportMode'       => $dataset['ImportMode'] ?? 'SPICE',
+            'OutputColumns'    => $dataset['OutputColumns']   ?? [],
+            'ImportMode'       => $dataset['ImportMode']      ?? 'SPICE',
         ];
 
+        // create or update
+        $created = false;
         try {
-            $this->quickSight->describeDataSet([
+            if ($isUpdate) {
+                $this->quickSight->updateDataSet($params);
+                echo "📝 Updated dataset: $newDatasetId\n";
+            } else {
+                $this->quickSight->createDataSet($params);
+                echo "📦 Created dataset: $newDatasetId\n";
+                $created = true;
+            }
+        } catch (AwsException $e) {
+            echo "❌ Deployment error: " . $e->getMessage() . "\n";
+            return false;
+        }
+
+        // validation: describe and compare
+        try {
+            $desc = $this->quickSight->describeDataSet([
                 'AwsAccountId' => $config['DestinationAwsAccountId'],
                 'DataSetId'    => $newDatasetId,
-            ]);
-            $response = $this->quickSight->updateDataSet($params);
-            echo "📝 Dataset updated: $newDatasetId\n";
+            ])['DataSet'];
         } catch (AwsException $e) {
-            if ($e->getAwsErrorCode() === 'ResourceNotFoundException') {
-                $response = $this->quickSight->createDataSet($params);
-                echo "📦 Dataset created: $newDatasetId\n";
-            } else {
-                echo "❌ Dataset deployment error: " . $e->getMessage() . "\n";
+            echo "❌ Error during validation describe: " . $e->getMessage() . "\n";
+            // rollback
+            if ($created) {
+                $this->quickSight->deleteDataSet([
+                    'AwsAccountId' => $config['DestinationAwsAccountId'],
+                    'DataSetId'    => $newDatasetId,
+                ]);
+                echo "⏪ Rolled back created dataset: $newDatasetId\n";
+            } elseif ($originalDefinition) {
+                $this->updateAsset($newDatasetId, $originalDefinition);
+                echo "⏪ Rolled back update on dataset: $newDatasetId\n";
+            }
+            return false;
+        }
+
+        // ensure DataSourceArn matches
+        if (!empty($config['DataSourceArn'])) {
+            $mismatch = false;
+            foreach ($desc['PhysicalTableMap'] as $table) {
+                if (isset($table['RelationalTable']) &&
+                    $table['RelationalTable']['DataSourceArn'] !== $config['DataSourceArn']
+                ) {
+                    $mismatch = true;
+                }
+                if (isset($table['CustomSql']) &&
+                    $table['CustomSql']['DataSourceArn'] !== $config['DataSourceArn']
+                ) {
+                    $mismatch = true;
+                }
+            }
+            if ($mismatch) {
+                echo "❌ Validation failed: DataSourceArn mismatch after deploy\n";
+                // rollback
+                if ($created) {
+                    $this->quickSight->deleteDataSet([
+                        'AwsAccountId' => $config['DestinationAwsAccountId'],
+                        'DataSetId'    => $newDatasetId,
+                    ]);
+                    echo "⏪ Rolled back created dataset: $newDatasetId\n";
+                } elseif ($originalDefinition) {
+                    $this->updateAsset($newDatasetId, $originalDefinition);
+                    echo "⏪ Rolled back update on dataset: $newDatasetId\n";
+                }
                 return false;
             }
         }
 
+        echo "✅ Validation passed: DataSourceArn is correct\n";
+
+        // post-deploy steps
         $this->handleRefreshProperties($newDatasetId, $config);
         $this->handleRefreshSchedules($newDatasetId, $config);
         $this->applyPermissionsAndTags($newDatasetId, $config);
@@ -148,13 +231,11 @@ class DatasetManager extends AssetManager
         return true;
     }
 
-
     private function handleRefreshProperties(string $datasetId, array $config): void
     {
-        if (!isset($config['template']['DataSetRefreshProperties'])) {
+        if (empty($config['template']['DataSetRefreshProperties'])) {
             return;
         }
-
         try {
             $this->quickSight->deleteDataSetRefreshProperties([
                 'AwsAccountId' => $config['DestinationAwsAccountId'],
@@ -165,7 +246,6 @@ class DatasetManager extends AssetManager
                 echo "⚠ Error deleting existing refresh properties: " . $e->getMessage() . "\n";
             }
         }
-
         try {
             $this->quickSight->putDataSetRefreshProperties([
                 'AwsAccountId'             => $config['DestinationAwsAccountId'],
@@ -184,13 +264,11 @@ class DatasetManager extends AssetManager
         if (empty($schedules)) {
             return;
         }
-
         try {
             $existing = $this->quickSight->listRefreshSchedules([
                 'AwsAccountId' => $config['DestinationAwsAccountId'],
                 'DataSetId'    => $datasetId,
             ])['RefreshSchedules'] ?? [];
-
             foreach ($existing as $schedule) {
                 $this->quickSight->deleteRefreshSchedule([
                     'AwsAccountId' => $config['DestinationAwsAccountId'],
@@ -201,9 +279,7 @@ class DatasetManager extends AssetManager
         } catch (AwsException $e) {
             echo "⚠ Could not list or delete existing refresh schedules: " . $e->getMessage() . "\n";
         }
-
-        sleep(2); // allow propagation
-
+        sleep(2);
         foreach ($schedules as $schedule) {
             $scheduleId = QuickSightHelper::generateUuid();
             try {
@@ -211,14 +287,14 @@ class DatasetManager extends AssetManager
                     'AwsAccountId' => $config['DestinationAwsAccountId'],
                     'DataSetId'    => $datasetId,
                     'Schedule'     => [
-                        'ScheduleId'        => $scheduleId,
-                        'RefreshType'       => $schedule['RefreshType'],
-                        'ScheduleFrequency' => $schedule['ScheduleFrequency'],
+                        'ScheduleId'         => $scheduleId,
+                        'RefreshType'        => $schedule['RefreshType'],
+                        'ScheduleFrequency'  => $schedule['ScheduleFrequency'],
                         'StartAfterDateTime' => $schedule['StartAfterDateTime'],
                     ],
                 ]);
                 echo "🕒 Refresh schedule created: $scheduleId\n";
-            } catch (AwsException $e) {
+            } catch (Aws\Exception\AwsException $e) {
                 echo "❌ Error creating refresh schedule: " . $e->getMessage() . "\n";
             }
         }
@@ -227,8 +303,7 @@ class DatasetManager extends AssetManager
     private function applyPermissionsAndTags(string $datasetId, array $config): void
     {
         $accountId = $config['DestinationAwsAccountId'];
-        $arn = "arn:aws:quicksight:{$this->awsRegion}:{$accountId}:dataset/{$datasetId}";
-
+        $arn       = "arn:aws:quicksight:{$this->awsRegion}:{$accountId}:dataset/{$datasetId}";
         if (!empty($config['DefaultPermissions'])) {
             try {
                 $this->quickSight->updateDataSetPermissions([
@@ -237,20 +312,23 @@ class DatasetManager extends AssetManager
                     'GrantPermissions' => $config['DefaultPermissions'],
                 ]);
                 echo "🔐 Dataset permissions updated.\n";
-            } catch (AwsException $e) {
+            } catch (Aws\Exception\AwsException $e) {
                 echo "⚠ Permissions update failed: " . $e->getMessage() . "\n";
             }
         }
-
         if (!empty($config['Tags'])) {
-            $tags = array_map(fn($k, $v) => ['Key' => $k, 'Value' => $v], array_keys($config['Tags']), $config['Tags']);
+            $tags = array_map(
+                fn($k, $v) => ['Key' => $k, 'Value' => $v],
+                array_keys($config['Tags']),
+                $config['Tags']
+            );
             try {
                 $this->quickSight->tagResource([
                     'ResourceArn' => $arn,
                     'Tags'        => $tags,
                 ]);
                 echo "🏷️ Dataset tagged successfully.\n";
-            } catch (AwsException $e) {
+            } catch (Aws\Exception\AwsException $e) {
                 echo "⚠ Tagging error: " . $e->getMessage() . "\n";
             }
         }
