@@ -78,7 +78,7 @@ class AssetReportingManager
             stream:    $fh,
             fields:    [
                 'Asset Type', 'ID', 'Name', 'Shared Folders', 'Owners', 'Group', 'Other Tags',
-                'UsedByDashboards', 'UsedByAnalyses', 'UsedByDataSets'
+                'UsedByDashboards', 'UsedByAnalyses', 'UsedByDataSets', 'Status'
             ],
             separator: ',',
             enclosure: '"',
@@ -201,6 +201,11 @@ class AssetReportingManager
         $total = count($datasets);
         $this->write("Describing {$total} datasets…");
 
+        // Initialize dependency map with empty arrays for all datasets to avoid nulls
+        foreach ($datasets as $ds) {
+            $this->datasetDependencyMap[$ds['DataSetId']] = [];
+        }
+
         foreach (array_chunk($datasets, $this->maxConcurrent) as $batch) {
             $promises = [];
             foreach ($batch as $ds) {
@@ -210,10 +215,11 @@ class AssetReportingManager
                 $promises[$id] = $this->quickSight
                     ->describeDataSetAsync($params)
                     ->otherwise(function ($reason) use ($params, $id) {
-                        if ($reason instanceof AwsException
+                        if (
+                            $reason instanceof AwsException
                             && $reason->getAwsErrorCode() === 'InvalidParameterValueException'
                         ) {
-                            echo "Skipping unsupported dataset {$id}: " . $reason->getMessage() . "\n";
+                            $this->write("Skipping unsupported dataset {$id}", 'info');
                             return null;
                         }
                         return QuickSightHelper::executeWithRetry(
@@ -237,12 +243,21 @@ class AssetReportingManager
                 }
                 $def = $value['DataSet'];
                 foreach ($def['LogicalTableMap'] ?? [] as $lt) {
-                    $src = $lt['Value']['Source'] ?? [];
+                    $src = $lt['Source'] ?? $lt['Value']['Source'] ?? [];
                     if (!empty($src['DataSetArn'])) {
                         $parent = basename($src['DataSetArn']);
-                        $this->datasetDependencyMap[$parent][] = $id;
+                        if (!in_array($id, $this->datasetDependencyMap[$parent] ?? [])) {
+                            $this->datasetDependencyMap[$parent][] = $id;
+                        }
                     }
                 }
+            }
+        }
+
+        // Clean up empty arrays in the dependency map for better CSV output
+        foreach ($this->datasetDependencyMap as $id => $deps) {
+            if (empty($deps)) {
+                $this->datasetDependencyMap[$id] = [];
             }
         }
     }
@@ -290,7 +305,8 @@ class AssetReportingManager
             foreach ($resp['DashboardSummaryList'] ?? [] as $d) {
                 $count++;
                 $tags  = TaggingHelper::getResourceTags($this->quickSight, $d['Arn']);
-                $group = TaggingHelper::getGroupTag(tags: $tags, tagKey: $this->config['tagging']['default_key'] ?? 'group');
+                $group = TaggingHelper::getGroupTag(tags: $tags, tagKey: $this->config['tagging']['default_key'] ??
+                'group');
                 if (($onlyUntagged && $group) || ($tagFilter && $group !== $tagFilter)) {
                     continue;
                 }
@@ -301,13 +317,28 @@ class AssetReportingManager
                 $owners = $this->getDashboardOwners($d['DashboardId']);
                 $other  = [];
                 foreach ($tags as $t) {
-                    if (strtolower($t['Key']) !== strtolower($this->config['tagging']['default_key'] ?? 'group')) {
+                    if (
+                        strtolower($t['Key']) !== strtolower($this->config['tagging']['default_key'] ??
+                        'group')
+                    ) {
                         $other[] = "{$t['Key']}={$t['Value']}";
                     }
                 }
                 fputcsv(
                     stream: $fh,
-                    fields: ['Dashboard', $d['DashboardId'], $d['Name'], implode('|', $sf), implode('|', $owners), $group ?? 'Untagged', implode('; ', $other), '', '', ''],
+                    fields: [
+                        'Dashboard',
+                        $d['DashboardId'],
+                        $d['Name'],
+                        implode('|', $sf),
+                        implode('|', $owners),
+                        $group ?? 'Untagged',
+                        implode('; ', $other),
+                        '',
+                        '',
+                        '',
+                        '' // Status blank for dashboards
+                    ],
                     separator: ',',
                     enclosure: '"',
                     escape: '\\'
@@ -336,7 +367,8 @@ class AssetReportingManager
             foreach ($resp['DataSetSummaries'] ?? [] as $ds) {
                 $count++;
                 $tags  = TaggingHelper::getResourceTags($this->quickSight, $ds['Arn']);
-                $group = TaggingHelper::getGroupTag(tags: $tags, tagKey: $this->config['tagging']['default_key'] ?? 'group');
+                $group = TaggingHelper::getGroupTag(tags: $tags, tagKey: $this->config['tagging']['default_key'] ??
+                'group');
                 if (($onlyUntagged && $group) || ($tagFilter && $group !== $tagFilter)) {
                     continue;
                 }
@@ -347,7 +379,10 @@ class AssetReportingManager
                 $owners  = $this->getDatasetOwners($ds['DataSetId']);
                 $other   = [];
                 foreach ($tags as $t) {
-                    if (strtolower($t['Key']) !== strtolower($this->config['tagging']['default_key'] ?? 'group')) {
+                    if (
+                        strtolower($t['Key']) !== strtolower($this->config['tagging']['default_key'] ??
+                        'group')
+                    ) {
                         $other[] = "{$t['Key']}={$t['Value']}";
                     }
                 }
@@ -357,7 +392,19 @@ class AssetReportingManager
 
                 fputcsv(
                     stream: $fh,
-                    fields: ['Dataset', $ds['DataSetId'], $ds['Name'], implode('|', $sf), implode('|', $owners), $group ?? 'Untagged', implode('; ', $other), implode('|', $dashList), implode('|', $anaList), implode('|', $depList)],
+                    fields: [
+                        'Dataset',
+                        $ds['DataSetId'],
+                        $ds['Name'],
+                        implode('|', $sf),
+                        implode('|', $owners),
+                        $group ?? 'Untagged',
+                        implode('; ', $other),
+                        implode('|', $dashList),
+                        implode('|', $anaList),
+                        implode('|', $depList),
+                        '' // Status blank for datasets
+                    ],
                     separator: ',',
                     enclosure: '"',
                     escape: '\\'
@@ -386,7 +433,8 @@ class AssetReportingManager
             foreach ($resp['AnalysisSummaryList'] ?? [] as $an) {
                 $count++;
                 $tags  = TaggingHelper::getResourceTags($this->quickSight, $an['Arn']);
-                $group = TaggingHelper::getGroupTag(tags: $tags, tagKey: $this->config['tagging']['default_key'] ?? 'group');
+                $group = TaggingHelper::getGroupTag(tags: $tags, tagKey: $this->config['tagging']['default_key'] ??
+                'group');
                 if (($onlyUntagged && $group) || ($tagFilter && $group !== $tagFilter)) {
                     continue;
                 }
@@ -403,9 +451,34 @@ class AssetReportingManager
                 }
                 $dashList = $this->analysisDashboardMap[$an['AnalysisId']] ?? [];
 
+                // Get analysis status directly from the describe call
+                $status = '';
+                try {
+                    $descResp = QuickSightHelper::executeWithRetry(
+                        client: $this->quickSight,
+                        method: 'describeAnalysis',
+                        params: ['AwsAccountId' => $this->awsAccountId, 'AnalysisId' => $an['AnalysisId']]
+                    );
+                    $status = $descResp['Analysis']['Status'] ?? 'UNKNOWN';
+                } catch (AwsException $e) {
+                    $this->write("Error getting status for analysis {$an['AnalysisId']}", 'info');
+                }
+
                 fputcsv(
                     stream: $fh,
-                    fields: ['Analysis', $an['AnalysisId'], $an['Name'], implode('|', $sf), implode('|', $owners), $group ?? 'Untagged', implode('; ', $other), implode('|', $dashList), '', ''],
+                    fields: [
+                        'Analysis',
+                        $an['AnalysisId'],
+                        $an['Name'],
+                        implode('|', $sf),
+                        implode('|', $owners),
+                        $group ?? 'Untagged',
+                        implode('; ', $other),
+                        implode('|', $dashList),
+                        '',
+                        '',
+                        $status // Status column at the end
+                    ],
                     separator: ',',
                     enclosure: '"',
                     escape: '\\'

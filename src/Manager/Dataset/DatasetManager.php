@@ -193,12 +193,14 @@ class DatasetManager extends AssetManager
         if (!empty($config['DataSourceArn'])) {
             $mismatch = false;
             foreach ($desc['PhysicalTableMap'] as $table) {
-                if (isset($table['RelationalTable']) &&
+                if (
+                    isset($table['RelationalTable']) &&
                     $table['RelationalTable']['DataSourceArn'] !== $config['DataSourceArn']
                 ) {
                     $mismatch = true;
                 }
-                if (isset($table['CustomSql']) &&
+                if (
+                    isset($table['CustomSql']) &&
                     $table['CustomSql']['DataSourceArn'] !== $config['DataSourceArn']
                 ) {
                     $mismatch = true;
