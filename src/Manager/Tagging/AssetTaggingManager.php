@@ -26,7 +26,7 @@ class AssetTaggingManager extends TaggingManager
         $stats = [
             'dashboards' => ['total' => 0, 'tagged' => 0, 'untagged' => []],
             'datasets'   => ['total' => 0, 'tagged' => 0, 'untagged' => []],
-            'analyses'   => ['total' => 0, 'tagged' => 0, 'untagged' => []],
+            'analyses'   => ['total' => 0, 'tagged' => 0, 'untagged' => [], 'skipped' => 0],
         ];
 
         // Debug: Add initial output
@@ -218,22 +218,6 @@ class AssetTaggingManager extends TaggingManager
     }
 
     /**
-     * Scan and tag analyses.
-     */
-    protected function scanAndTagAnalyses(array $folders, bool $autoApply = false): array
-    {
-        return $this->scanAndTagAssets(
-            folders:       $folders,
-            assetType:     'analyses',
-            apiMethod:     'listAnalyses',
-            resultKey:     'AnalysisSummaryList',
-            assetTypeName: 'Analysis',
-            idField:       'AnalysisId',
-            autoApply:     $autoApply
-        );
-    }
-
-    /**
      * Generic method to scan and tag QuickSight assets.
      *
      * @param array  $folders             Folder information.
@@ -420,6 +404,220 @@ class AssetTaggingManager extends TaggingManager
                 'total'    => $assetCount,
                 'tagged'   => $taggedCount,
                 'untagged' => $untaggedAssets,
+            ];
+        }
+    }
+
+    /**
+     * Scan and tag analyses.
+     */
+    protected function scanAndTagAnalyses(array $folders, bool $autoApply = false): array
+    {
+        $assetCount     = 0;
+        $taggedCount    = 0;
+        $skippedCount   = 0;
+        $untaggedAssets = [];
+        $nextToken      = null;
+        $assetType      = 'analyses';
+        $assetTypeName  = 'Analysis';
+        $idField        = 'AnalysisId';
+
+        $this->output(message: "Scanning {$assetType}...");
+
+        try {
+            do {
+                $params = ['AwsAccountId' => $this->awsAccountId];
+                if ($nextToken) {
+                    $params['NextToken'] = $nextToken;
+                }
+
+                try {
+                    $assetsResponse = QuickSightHelper::executeWithRetry(
+                        $this->quickSight,
+                        'listAnalyses',
+                        $params
+                    );
+
+                    if (
+                        !isset($assetsResponse['AnalysisSummaryList']) ||
+                        !is_array($assetsResponse['AnalysisSummaryList'])
+                    ) {
+                        $this->output(
+                            message: "Warning: Missing or invalid result key 'AnalysisSummaryList' in API response",
+                            type:    'warning'
+                        );
+                        break;
+                    }
+
+                    foreach ($assetsResponse['AnalysisSummaryList'] as $asset) {
+                        $assetCount++;
+
+                        // Check for DELETED status by making describe call
+                        try {
+                            $descResponse = QuickSightHelper::executeWithRetry(
+                                $this->quickSight,
+                                'describeAnalysis',
+                                [
+                                    'AwsAccountId' => $this->awsAccountId,
+                                    'AnalysisId' => $asset['AnalysisId']
+                                ]
+                            );
+
+                            // Skip analyses with DELETED status
+                            if (
+                                isset($descResponse['Analysis']['Status']) &&
+                                $descResponse['Analysis']['Status'] === 'DELETED'
+                            ) {
+                                $this->output(
+                                    message: "⏭ {$assetTypeName} #{$assetCount} {$asset[$idField]} 
+                                    '{$asset['Name']}' - Skipped (DELETED)",
+                                    type:    'comment'
+                                );
+                                $skippedCount++;
+                                continue;
+                            }
+                        } catch (AwsException $e) {
+                            // If we can't get the status, assume it's not deleted and continue
+                            $this->output(
+                                message: "Warning: Could not determine status for analysis {$asset[$idField]}",
+                                type:    'warning'
+                            );
+                        }
+
+                        // Safely check for Arn
+                        if (!isset($asset['Arn'])) {
+                            $this->output(
+                                message: "Warning: Asset #{$assetCount} is missing 'Arn' field",
+                                type:    'warning'
+                            );
+                            continue;
+                        }
+
+                        // Safely get folder hierarchies
+                        $folderHierarchies = isset($folders[$asset['Arn']]) && is_array($folders[$asset['Arn']])
+                            ? $folders[$asset['Arn']]
+                            : [];
+
+                        $folderNamesDisplay = !empty($folderHierarchies)
+                            ? implode(', ', $folderHierarchies)
+                            : 'None';
+
+                        // Get tags
+                        $tags = TaggingHelper::getResourceTags(
+                            $this->quickSight,
+                            $asset['Arn']
+                        );
+
+                        $groupTag = TaggingHelper::getGroupTag(
+                            tags:   $tags,
+                            tagKey: $this->tagKey
+                        );
+
+                        // Determine tag based on name and folders
+                        $derivedTag = null;
+                        if (isset($asset['Name'])) {
+                            $derivedTag = $this->determineAssetTag($asset['Name'], $folderHierarchies);
+                        }
+
+                        // Process based on existing tag
+                        if ($groupTag) {
+                            if ($derivedTag && $derivedTag !== $groupTag) {
+                                $this->output(
+                                    message: "⚠ {$assetTypeName} #{$assetCount} {$asset[$idField]}",
+                                    type:    'comment'
+                                );
+                                $this->output(message: "  Name: {$asset['Name']}");
+                                $this->output(message: "  Folders: {$folderNamesDisplay}");
+                                $this->output(message: "  Current Group: '{$groupTag}'");
+
+                                if (
+                                    !$this->handleAssetTagging(
+                                        asset:               $asset,
+                                        idField:             $idField,
+                                        folderNames:         $folderNamesDisplay,
+                                        folderHierarchies:   $folderHierarchies,
+                                        derivedTag:          $derivedTag,
+                                        taggedCount:         $taggedCount,
+                                        untaggedAssets:      $untaggedAssets,
+                                        handleDatasetErrors: false,
+                                        autoApply:           $autoApply
+                                    )
+                                ) {
+                                    $untaggedAssets[] = [
+                                        $asset[$idField],
+                                        $asset['Name'],
+                                        $folderNamesDisplay,
+                                    ];
+                                }
+                            } else {
+                                $this->output(
+                                    message: "✓ {$assetTypeName} #{$assetCount} {$asset[$idField]} " .
+                                    "'{$asset['Name']}' [{$this->tagKey}: $groupTag]",
+                                    type:    'success'
+                                );
+                            }
+                        } else {
+                            $this->output(
+                                message: "⚠ {$assetTypeName} #{$assetCount} {$asset[$idField]}",
+                                type:    'warning'
+                            );
+                            $this->output(message: "  Name: {$asset['Name']}");
+                            $this->output(message: "  Folders: {$folderNamesDisplay}");
+
+                            if (
+                                !$this->handleAssetTagging(
+                                    asset:               $asset,
+                                    idField:             $idField,
+                                    folderNames:         $folderNamesDisplay,
+                                    folderHierarchies:   $folderHierarchies,
+                                    derivedTag:          $derivedTag,
+                                    taggedCount:         $taggedCount,
+                                    untaggedAssets:      $untaggedAssets,
+                                    handleDatasetErrors: false,
+                                    autoApply:           $autoApply
+                                )
+                            ) {
+                                $untaggedAssets[] = [
+                                    $asset[$idField],
+                                    $asset['Name'],
+                                    $folderNamesDisplay,
+                                ];
+                            }
+                        }
+                    }
+
+                    $nextToken = $assetsResponse['NextToken'] ?? null;
+                } catch (AwsException $e) {
+                    $this->output(
+                        message: "Error scanning {$assetType}: " . $e->getMessage(),
+                        type:    'error'
+                    );
+                    break;
+                }
+            } while ($nextToken);
+
+            $this->output(
+                message: "Analysis scan complete. Processed $assetCount analyses, " .
+                "tagged $taggedCount, skipped $skippedCount."
+            );
+
+            return [
+                'total'    => $assetCount,
+                'tagged'   => $taggedCount,
+                'untagged' => $untaggedAssets,
+                'skipped'  => $skippedCount
+            ];
+        } catch (\Exception $e) {
+            $this->output(
+                message: "Critical error in scanAndTagAnalyses: " . $e->getMessage(),
+                type:    'error'
+            );
+
+            return [
+                'total'    => $assetCount,
+                'tagged'   => $taggedCount,
+                'untagged' => $untaggedAssets,
+                'skipped'  => $skippedCount
             ];
         }
     }
@@ -725,9 +923,13 @@ class AssetTaggingManager extends TaggingManager
         $this->output(message: "  Datasets: {$stats['datasets']['total']} total, " .
         "{$stats['datasets']['tagged']} tagged, " .
         count($stats['datasets']['untagged']) . " untagged");
+
+        // Check if the 'skipped' key exists for analyses (for backward compatibility)
+        $skippedAnalyses = isset($stats['analyses']['skipped']) ? $stats['analyses']['skipped'] : 0;
         $this->output(message: "  Analyses: {$stats['analyses']['total']} total, " .
         "{$stats['analyses']['tagged']} tagged, " .
-        count($stats['analyses']['untagged']) . " untagged");
+        count($stats['analyses']['untagged']) . " untagged" .
+        ($skippedAnalyses > 0 ? ", {$skippedAnalyses} skipped (DELETED)" : ""));
     }
 
     /**
