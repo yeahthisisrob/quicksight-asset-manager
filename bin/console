@@ -25,12 +25,13 @@ use QSAssetManager\Command\Export\ExportAssetsCommand;
 use QSAssetManager\Command\Reporting\ExportAssetReportCommand;
 use QSAssetManager\Command\Reporting\ExportDashboardViewCountsCommand;
 use QSAssetManager\Command\Reporting\ExportUserReportCommand;
+use QSAssetManager\Command\Reporting\ExportIngestionDetailsCommand;  // <— New
 
 // Tagging and user management
 use QSAssetManager\Command\Tagging\ScanAssetsCommand;
 use QSAssetManager\Command\User\DeleteInactiveUsersCommand;
 
-// ** Permissions commands **
+// Permissions commands
 use QSAssetManager\Command\Permissions\AddPrincipalPermissionsCommand;
 
 // Load global configuration
@@ -58,6 +59,7 @@ $application->add(new ExportAssetsCommand());
 $application->add(new ExportAssetReportCommand());
 $application->add(new ExportDashboardViewCountsCommand());
 $application->add(new ExportUserReportCommand());
+$application->add(new ExportIngestionDetailsCommand());  // <— New
 
 // Misc
 $application->add(new ScanAssetsCommand());

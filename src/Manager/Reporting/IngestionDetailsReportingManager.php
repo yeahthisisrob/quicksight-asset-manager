@@ -20,6 +20,8 @@ class IngestionDetailsReportingManager
     ) {}
 
     /**
+     * Export a CSV report of QuickSight ingestion details, including schedules, errors, and row info.
+     *
      * @param string|null $outputPath Directory to write CSV into
      * @return string|false Path to CSV on success, false on failure
      */
@@ -43,12 +45,15 @@ class IngestionDetailsReportingManager
             return false;
         }
 
-        // CSV header (explicit escape parameter added)
+        // CSV header
         fputcsv(
             $fh,
             [
                 'DataSetId','DataSetName','Group','OtherTags',
-                'IngestionId','CreatedTime','IngestionStatus','IngestionTimeInSeconds'
+                'IngestionId','CreatedTime','IngestionStatus','IngestionTimeInSeconds',
+                'HasSchedule','HasIncrementalRefresh','ScheduleFrequencies',
+                'ErrorMessage','ErrorType',
+                'RowsDropped','RowsIngested','TotalRowsInDataset',
             ],
             ',', '"', '\\'
         );
@@ -56,16 +61,16 @@ class IngestionDetailsReportingManager
         // Cutoff = now - 30 days
         $cutoff = new \DateTimeImmutable('-30 days');
 
-        // 1) list all datasets
+        // 1. List all datasets
         $datasets = QuickSightHelper::paginate(
-            client:        $this->quickSight,
-            awsAccountId:  $this->awsAccountId,
-            operation:     'listDataSets',
-            listKey:       'DataSetSummaries'
+            client:       $this->quickSight,
+            awsAccountId: $this->awsAccountId,
+            operation:    'listDataSets',
+            listKey:      'DataSetSummaries'
         );
 
         foreach ($datasets as $ds) {
-            // only SPICE
+            // Only SPICE datasets
             if (strtoupper($ds['ImportMode'] ?? '') !== 'SPICE') {
                 continue;
             }
@@ -73,11 +78,11 @@ class IngestionDetailsReportingManager
             $dsName = $ds['Name'] ?? '';
             $arn    = $ds['Arn']  ?? '';
 
-            // fetch tags & group
+            // Tags & Group
             $tags  = TaggingHelper::getResourceTags($this->quickSight, $arn);
             $group = TaggingHelper::getGroupTag(
                 tags:   $tags,
-                tagKey: $this->config['tagging']['default_key'] ?? 'group'
+                tagKey:$this->config['tagging']['default_key'] ?? 'group'
             );
             $other = [];
             foreach ($tags as $t) {
@@ -87,7 +92,43 @@ class IngestionDetailsReportingManager
             }
             $otherStr = implode('; ', $other);
 
-            // 2) list ingestions **with DataSetId** and paging
+            // 2. Fetch refresh schedules
+            try {
+                $scheduleResp = QuickSightHelper::executeWithRetry(
+                    client: $this->quickSight,
+                    method: 'listRefreshSchedules',
+                    params: [
+                        'AwsAccountId' => $this->awsAccountId,
+                        'DataSetId'    => $dsId,
+                    ]
+                );
+                $refreshSchedules = $scheduleResp['RefreshSchedules'] ?? [];
+            } catch (\Aws\Exception\AwsException $e) {
+                $this->write(
+                    "Warning: could not list refresh schedules for {$dsId}: {$e->getMessage()}",
+                    'warning'
+                );
+                $refreshSchedules = [];
+            }
+
+            $hasSchedule    = !empty($refreshSchedules);
+            $hasIncremental = false;
+            $scheduleLines  = [];
+            foreach ($refreshSchedules as $s) {
+                if (($s['RefreshType'] ?? '') === 'INCREMENTAL_REFRESH') {
+                    $hasIncremental = true;
+                }
+
+                $sf         = $s['ScheduleFrequency'] ?? [];
+                $interval   = $sf['Interval']    ?? '';
+                $timeOfDay  = $sf['TimeOfTheDay'] ?? '';
+                $tz         = $sf['Timezone']     ?? '';
+
+                $scheduleLines[] = "{$interval} at {$timeOfDay} {$tz}";
+            }
+            $scheduleFreqStr = implode('; ', array_unique($scheduleLines));
+
+            // 3. List ingestions
             $ingestions = [];
             $token      = null;
             do {
@@ -104,12 +145,9 @@ class IngestionDetailsReportingManager
                         method: 'listIngestions',
                         params: $params
                     );
-                    $ingestions = array_merge(
-                        $ingestions,
-                        $resp['Ingestions'] ?? []
-                    );
-                    $token = $resp['NextToken'] ?? null;
-                } catch (AwsException $e) {
+                    $ingestions = array_merge($ingestions, $resp['Ingestions'] ?? []);
+                    $token      = $resp['NextToken'] ?? null;
+                } catch (\Aws\Exception\AwsException $e) {
                     $this->write(
                         "Error listing ingestions for {$dsId}: {$e->getMessage()}",
                         'warning'
@@ -118,8 +156,8 @@ class IngestionDetailsReportingManager
                 }
             } while ($token);
 
+            // 4. Process each ingestion
             foreach ($ingestions as $ing) {
-                // 3) only last 30 days
                 if (empty($ing['CreatedTime'])) {
                     continue;
                 }
@@ -132,38 +170,59 @@ class IngestionDetailsReportingManager
                 $status  = $ing['IngestionStatus'] ?? '';
                 $latency = $ing['IngestionTimeInSeconds'] ?? null;
 
-                // 4) if latency missing, describe it
-                if ($latency === null) {
+                // Prepare default error/row info
+                $errorInfo = $ing['ErrorInfo'] ?? [];
+                $rowInfo   = $ing['RowInfo']   ?? [];
+
+                // If any details missing, call describeIngestion
+                if ($latency === null || empty($errorInfo) || empty($rowInfo)) {
                     try {
                         $detail = QuickSightHelper::executeWithRetry(
                             client: $this->quickSight,
                             method: 'describeIngestion',
                             params: [
-                                'AwsAccountId'=> $this->awsAccountId,
-                                'DataSetId'   => $dsId,
-                                'IngestionId' => $ingId
+                                'AwsAccountId' => $this->awsAccountId,
+                                'DataSetId'    => $dsId,
+                                'IngestionId'  => $ingId,
                             ]
                         );
-                        $def     = $detail['Ingestion'] ?? [];
-                        $status  = $def['IngestionStatus'] ?? $status;
-                        $latency = $def['IngestionTimeInSeconds'] ?? '';
-                    } catch (AwsException) {
-                        // swallow individual failures
+                        $def       = $detail['Ingestion'] ?? [];
+                        $status    = $def['IngestionStatus'] ?? $status;
+                        $latency   = $def['IngestionTimeInSeconds'] ?? $latency;
+                        $errorInfo = $def['ErrorInfo']            ?? $errorInfo;
+                        $rowInfo   = $def['RowInfo']              ?? $rowInfo;
+                    } catch (\Aws\Exception\AwsException $e) {
+                        // ignore per‐ingestion failures
                     }
                 }
 
-                // write row (explicit escape parameter)
+                // Extract error & row metrics
+                $errorMessage = $errorInfo['Message']      ?? '';
+                $errorType    = $errorInfo['Type']         ?? '';
+                $rowsDropped  = $rowInfo['RowsDropped']    ?? '';
+                $rowsIngested = $rowInfo['RowsIngested']   ?? '';
+                $totalRows    = $rowInfo['TotalRowsInDataset'] ?? '';
+
+                // Write CSV row
                 fputcsv(
                     $fh,
                     [
                         $dsId,
                         $dsName,
-                        $group   ?? 'Untagged',
+                        $group     ?: 'Untagged',
                         $otherStr,
                         $ingId,
                         $created->format(\DateTime::ATOM),
                         $status,
-                        $latency
+                        $latency,
+                        $hasSchedule    ? 'TRUE' : 'FALSE',
+                        $hasIncremental ? 'TRUE' : 'FALSE',
+                        $scheduleFreqStr,
+                        $errorMessage,
+                        $errorType,
+                        $rowsDropped,
+                        $rowsIngested,
+                        $totalRows,
                     ],
                     ',', '"', '\\'
                 );
