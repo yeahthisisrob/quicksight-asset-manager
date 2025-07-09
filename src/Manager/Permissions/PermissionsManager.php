@@ -222,7 +222,7 @@ class PermissionsManager
                     $this->qs,
                     $this->awsAccountId,
                     'listDataSources',
-                    'DataSourceSummaries'
+                    'DataSources'
                 ) as $item
             ) {
                 $stats['datasources']++;

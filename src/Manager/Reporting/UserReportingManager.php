@@ -40,7 +40,7 @@ class UserReportingManager
      * Active, Arn, CustomPermissionsName, Email,
      * ExternalLoginFederationProviderType, ExternalLoginFederationProviderUrl,
      * ExternalLoginId, IdentityType, PrincipalId, Role, UserName, Tags,
-     * [Groups,] Embed Calls, Last Embed, Unique Days.
+     * [Groups,] Total Activity, Last Activity, Active Days.
      *
      * @param  string|null  $outputPath    Directory for CSV.
      * @param  bool         $withGroups    If true, fetch and output user groups.
@@ -78,7 +78,7 @@ class UserReportingManager
             'Active', 'Arn', 'CustomPermissionsName', 'Email',
             'ExternalLoginFederationProviderType', 'ExternalLoginFederationProviderUrl',
             'ExternalLoginId', 'IdentityType', 'PrincipalId', 'Role', 'UserName', 'Tags',
-            'Embed Calls', 'Last Embed', 'Unique Days'
+            'Total Activity', 'Last Activity', 'Active Days'
         ];
 
         if ($withGroups) {
@@ -112,8 +112,16 @@ class UserReportingManager
         $endTime   = new \DateTimeImmutable('now', new \DateTimeZone("UTC"));
         $startTime = $endTime->sub(new \DateInterval("P90D"));
 
-        $events = CloudTrailHelper::lookupDashboardEvents(
+        // Include multiple event types for comprehensive user activity tracking
+        $eventNames = [
+            'GetDashboardEmbedUrl',
+            'GetDashboard', 
+            'GetAnalysis'
+        ];
+
+        $events = CloudTrailHelper::lookupQuickSightEventsByName(
             client: $cloudTrailClient,
+            eventNames: $eventNames,
             startTime: $startTime,
             endTime: $endTime,
             progressCallback: function ($page) use ($fetchEventsStart): void {
@@ -616,10 +624,45 @@ class UserReportingManager
             }
 
             $ct = json_decode($event['CloudTrailEvent'], true);
-            $user = $ct['userIdentity']['userName'] ??
-                   (isset($ct['requestParameters']['userArn'])
-                        ? CloudTrailHelper::extractUsernameFromArn($ct['requestParameters']['userArn'])
-                        : 'Unknown');
+            
+            // Extract username from various possible locations in CloudTrail event
+            $user = null;
+            
+            // Try userIdentity.userName first
+            if (isset($ct['userIdentity']['userName'])) {
+                $user = $ct['userIdentity']['userName'];
+            }
+            // Try sessionContext for assumed role sessions
+            elseif (isset($ct['userIdentity']['sessionContext']['sessionIssuer']['userName'])) {
+                $user = $ct['userIdentity']['sessionContext']['sessionIssuer']['userName'];
+            }
+            // Try to extract from userIdentity.arn
+            elseif (isset($ct['userIdentity']['arn'])) {
+                $arn = $ct['userIdentity']['arn'];
+                // Check if it's an assumed-role ARN
+                if (strpos($arn, ':assumed-role/') !== false) {
+                    // For assumed-role ARNs like arn:aws:sts::123456789012:assumed-role/QuickSite-Admin/email@example.com
+                    // We want "QuickSite-Admin/email@example.com" to match QuickSight username format
+                    $assumedRolePart = substr($arn, strpos($arn, ':assumed-role/') + 14);
+                    // This gives us "QuickSite-Admin/email@example.com" which should match the QS username
+                    $user = $assumedRolePart;
+                } else {
+                    // For regular ARNs, take the last part after /
+                    $arnParts = explode('/', $arn);
+                    $user = end($arnParts);
+                }
+            }
+            // Try requestParameters.userArn (for embed events)
+            elseif (isset($ct['requestParameters']['userArn'])) {
+                $user = CloudTrailHelper::extractUsernameFromArn($ct['requestParameters']['userArn']);
+            }
+            // Fallback to principalId
+            elseif (isset($ct['userIdentity']['principalId'])) {
+                $user = $ct['userIdentity']['principalId'];
+            }
+            else {
+                $user = 'Unknown';
+            }
 
             $eventTime = strtotime($event['EventTime']);
             $eventDay = date('Y-m-d', $eventTime);
