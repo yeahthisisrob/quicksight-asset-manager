@@ -79,6 +79,7 @@ Options:
   -V, --version         Display this application version
       --ansi|--no-ansi  Force (or disable --no-ansi) ANSI output
   -n, --no-interaction  Do not ask any interactive question
+  -p, --profile[=PROFILE]  AWS profile to use
   -v|vv|vvv, --verbose  Increase the verbosity of messages: 1 for normal output, 2 for more verbose output and 3 for debug
 Available commands:
   completion                              Dump the shell completion script
@@ -165,7 +166,7 @@ php bin/console report:users [outputPath] [--with-groups] [--with-tags]
 
 ```
 # Find and (optionally) delete inactive QuickSight users
-php bin/console user:prune-inactive [--dry-run] [--force]
+php bin/console user:delete-inactive [--dry-run] [--force]
 ```
 
 
