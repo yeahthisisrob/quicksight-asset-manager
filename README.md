@@ -90,14 +90,21 @@ Available commands:
   analysis:remove-broken-datasets         Remove broken DataSetIdentifiers from a QuickSight analysis.
   analysis:rename                         Rename an existing QuickSight analysis.
  assets
+  assets:export                           Export QuickSight dashboards and datasets
   assets:scan                             Scan QuickSight assets and interactively tag them with groups
  dashboard
   dashboard:deploy                        Deploy a QuickSight dashboard using a combined deployment config JSON file.
   dashboard:remove-broken-datasets        Remove broken DataSetIdentifiers from a QuickSight dashboard.
   dashboard:rename                        Rename an existing QuickSight dashboard.
+ dataset
+  dataset:deploy                          Deploy a QuickSight dataset using a combined deployment config JSON file.
+  dataset:rename                          Rename a QuickSight dataset by ID.
+ permissions
+  permissions:add-principal               Grant owner or reader permissions to a principal on QS assets
  reporting
   reporting:asset-report                  Generate a CSV report of QuickSight assets with folder, permission, and tag details.
   reporting:export-dashboard-view-counts  Export dashboard view counts report based on CloudTrail events.
+  reporting:ingestion-details             Generate CSV of SPICE dataset ingestions over the last 30 days, with tags.
   reporting:user-report                   Generate a CSV report of QuickSight users with metadata and embed stats.
  users
   users:delete-inactive                   Find and delete inactive QuickSight users
@@ -107,6 +114,18 @@ For detailed help on any specific command, use:
 
 ```bash
 php bin/console help [command]
+```
+
+### AWS Profile Support
+
+All commands support the `--profile` (or `-p`) option to specify which AWS profile to use:
+
+```bash
+# Use a specific AWS profile
+php bin/console assets:export --profile=production
+
+# Short form
+php bin/console reporting:user-report -p staging
 ```
 
 ### Dashboard Operations
@@ -120,9 +139,6 @@ php bin/console dashboard:remove-broken-datasets [dashboardId]
 
 # Deploy dashboard from a JSON template (create new or update existing)
 php bin/console dashboard:deploy [path/to/deployment.json]
-
-# Export dashboard usage analytics from CloudTrail
-php bin/console dashboard:export-view-counts [outputPath]
 ```
 
 ### Analysis Operations
@@ -144,29 +160,50 @@ php bin/console analysis:deploy [path/to/deployment.json]
 # Interactive asset tagging
 php bin/console assets:scan
 
-# Selective asset scanning
-php bin/console assets:scan --dashboard  # Only dashboards
-php bin/console assets:scan --dataset    # Only datasets
-php bin/console assets:scan --analysis   # Only analyses
+# Export QuickSight assets (dashboards and datasets)
+php bin/console assets:export
+
+# Selective asset scanning (check command help for available options)
+php bin/console assets:scan --help
 ```
 
 ### Reporting
 
 ```bash
-# Export folder-aware asset report (dashboards, datasets, analyses)
-php bin/console report:assets [outputPath]
+# Generate a CSV report of QuickSight assets with folder, permission, and tag details
+php bin/console reporting:asset-report
 
-# Export dashboard view counts report
-php bin/console report:dashboard-views [outputPath]
+# Export dashboard view counts report based on CloudTrail events
+php bin/console reporting:export-dashboard-view-counts
 
-# Export user activity report (optional: include groups and tags)
-php bin/console report:users [outputPath] [--with-groups] [--with-tags]
+# Generate CSV of SPICE dataset ingestions over the last 30 days, with tags
+php bin/console reporting:ingestion-details
+
+# Generate a CSV report of QuickSight users with metadata and embed stats
+php bin/console reporting:user-report
 ```
 ### User Management
 
+```bash
+# Find and delete inactive QuickSight users
+php bin/console users:delete-inactive
 ```
-# Find and (optionally) delete inactive QuickSight users
-php bin/console user:delete-inactive [--dry-run] [--force]
+
+### Dataset Operations
+
+```bash
+# Deploy a QuickSight dataset using a combined deployment config JSON file
+php bin/console dataset:deploy [path/to/deployment.json]
+
+# Rename a QuickSight dataset by ID
+php bin/console dataset:rename [datasetId] [newName]
+```
+
+### Permissions Management
+
+```bash
+# Grant owner or reader permissions to a principal on QS assets
+php bin/console permissions:add-principal
 ```
 
 
@@ -281,13 +318,13 @@ php bin/console dashboard:deploy [path/to/deployment.json]
 
 ```bash
 # Generate asset inventory report
-php bin/console assets:scan --report
+php bin/console reporting:asset-report
 
 # Interactive tagging session
 php bin/console assets:scan
 
 # Export usage analytics
-php bin/console dashboard:export-view-counts [outputPath]
+php bin/console reporting:export-dashboard-view-counts
 ```
 
 ## Project Structure
@@ -336,10 +373,11 @@ qs-asset-manager/
 
 ### Common Issues
 
-- **AWS Authentication Errors**: Verify AWS credentials and permissions
+- **AWS Authentication Errors**: Verify AWS credentials and permissions, or use the `--profile` option to specify a different AWS profile
 - **API Throttling**: For large batch operations, add delays between API calls
 - **Missing Dataset Declarations**: Ensure all referenced datasets are properly declared
 - **Version Conflicts**: When updating assets, verify you're working with the latest version
+- **EC2 Metadata Service Errors**: If you see errors about `169.254.169.254`, ensure your AWS credentials are properly configured using `aws configure` or environment variables
 
 ### Debug Mode
 
