@@ -5,6 +5,8 @@ require __DIR__ . '/../vendor/autoload.php';
 require __DIR__ . '/../bootstrap.php';
 
 use Symfony\Component\Console\Application;
+use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Input\ArgvInput;
 
 // Analysis commands
 use QSAssetManager\Command\Exploration\Analysis\RenameAnalysisCommand;
@@ -38,6 +40,21 @@ use QSAssetManager\Command\Permissions\AddPrincipalPermissionsCommand;
 $config = require PROJECT_ROOT . '/config/global.php';
 
 $application = new Application('QSAssetManager', '1.0.0');
+
+// Add global profile option
+$application->getDefinition()->addOption(
+    new InputOption('profile', 'p', InputOption::VALUE_OPTIONAL, 'AWS profile to use')
+);
+
+// Check for profile option and set AWS_PROFILE environment variable
+$input = new ArgvInput();
+if ($input->hasParameterOption(['--profile', '-p'])) {
+    $profile = $input->getParameterOption(['--profile', '-p']);
+    if ($profile) {
+        putenv("AWS_PROFILE=$profile");
+        $_ENV['AWS_PROFILE'] = $profile;
+    }
+}
 
 // Register commands
 // Analysis
